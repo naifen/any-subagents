@@ -1,0 +1,4 @@
+# Single-package repo — workspace config is only here for native build allowlists.
+allowBuilds:
+  better-sqlite3: true
+  esbuild: true
