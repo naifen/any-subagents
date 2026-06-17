@@ -1,7 +1,9 @@
 import { existsSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { execFile } from "node:child_process";
+import { execGit, execRequired } from "./exec.js";
+
+export { execRequired, execGit } from "./exec.js";
 
 export const assertGitRepo = async (repo: string): Promise<void> => {
   await execRequired("git", ["rev-parse", "--show-toplevel"], repo);
@@ -46,36 +48,3 @@ export const parsePorcelainChangedFiles = (output: string): string[] =>
     .map((line) => line.slice(3).trim())
     .filter(Boolean)
     .map((file) => file.replace(/^"|"$/g, ""));
-
-export const execRequired = async (command: string, args: string[], cwd: string): Promise<string> => {
-  const result = await execFileResult(command, args, cwd);
-  if (result.code !== 0) {
-    throw new Error(`${command} ${args.join(" ")} failed: ${result.stderr}`);
-  }
-  return result.stdout;
-};
-
-export const execGit = async (args: string[], cwd: string): Promise<{ stdout: string; stderr: string; code: number }> =>
-  execFileResult("git", args, cwd);
-
-export const execShell = async (command: string, cwd: string): Promise<{ stdout: string; stderr: string; code: number }> =>
-  new Promise((resolve) => {
-    execFile("/bin/sh", ["-c", command], { cwd }, (error, stdout, stderr) => {
-      const code =
-        typeof (error as { code?: unknown } | null)?.code === "number" ? ((error as { code: number }).code as number) : error ? 1 : 0;
-      resolve({ stdout, stderr, code });
-    });
-  });
-
-export const execFileResult = async (
-  command: string,
-  args: string[],
-  cwd: string
-): Promise<{ stdout: string; stderr: string; code: number }> =>
-  new Promise((resolve) => {
-    execFile(command, args, { cwd }, (error, stdout, stderr) => {
-      const code =
-        typeof (error as { code?: unknown } | null)?.code === "number" ? ((error as { code: number }).code as number) : error ? 1 : 0;
-      resolve({ stdout, stderr, code });
-    });
-  });

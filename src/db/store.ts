@@ -4,18 +4,9 @@ import Database from "better-sqlite3";
 import type { Artifact, ResultEnvelope, Session, SessionBrief, TaskEnvelope } from "../schemas/index.js";
 import { newEventId } from "../core/id.js";
 import { nowIso } from "../core/time.js";
+import type { GroupStatus, TaskRuntimeStatus } from "../core/status.js";
 
-export type TaskRuntimeStatus =
-  | "queued"
-  | "running"
-  | "completed"
-  | "blocked"
-  | "failed"
-  | "timed_out"
-  | "cancelled"
-  | "interrupted"
-  | "failed_contract"
-  | "completed_with_failed_verification";
+export type { TaskRuntimeStatus, GroupStatus } from "../core/status.js";
 
 export interface StoredTask {
   task_id: string;
@@ -37,7 +28,7 @@ export interface StoredGroup {
   group_id: string;
   session_id: string;
   title: string;
-  status: "queued" | "running" | "completed" | "failed" | "cancelled" | "mixed";
+  status: GroupStatus;
   expected_brief_revision: number;
   created_at: string;
   updated_at: string;

@@ -1,4 +1,4 @@
-import { execFile } from "node:child_process";
+import { execFileResult } from "../core/exec.js";
 
 export interface CodexAdapterConfig {
   command: string;
@@ -28,7 +28,7 @@ export interface CodexSmokeResult {
 
 export const checkCodexAdapterHealth = async (config: CodexAdapterConfig): Promise<CodexHealth> => {
   const versionArgs = config.versionArgs ?? ["--version"];
-  const result = await execFileResult(config.command, versionArgs);
+  const result = await execFileResult(config.command, versionArgs, process.cwd());
   const base = {
     adapter: "codex" as const,
     command: config.command,
@@ -62,24 +62,3 @@ export const smokeCodexAdapter = async (config: CodexAdapterConfig): Promise<Cod
     health
   };
 };
-
-const execFileResult = async (
-  command: string,
-  args: string[]
-): Promise<{ stdout: string; stderr: string; code: number; errorCode?: string; errorMessage?: string }> =>
-  new Promise((resolve) => {
-    execFile(command, args, (error, stdout, stderr) => {
-      if (error) {
-        const maybeNodeError = error as NodeJS.ErrnoException & { code?: string | number };
-        resolve({
-          stdout,
-          stderr,
-          code: typeof maybeNodeError.code === "number" ? maybeNodeError.code : 1,
-          errorMessage: maybeNodeError.message,
-          ...(typeof maybeNodeError.code === "string" ? { errorCode: maybeNodeError.code } : {})
-        });
-        return;
-      }
-      resolve({ stdout, stderr, code: 0 });
-    });
-  });

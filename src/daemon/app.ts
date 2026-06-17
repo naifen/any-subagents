@@ -1,6 +1,7 @@
 import fastify, { type FastifyInstance } from "fastify";
 import type { ControlPlane } from "../core/control-plane.js";
 import { definedEntries } from "../core/defined.js";
+import { NotFoundError } from "../core/errors.js";
 
 export interface DaemonAppOptions {
   plane: ControlPlane;
@@ -9,11 +10,10 @@ export interface DaemonAppOptions {
 export const createDaemonApp = ({ plane }: DaemonAppOptions): FastifyInstance => {
   const app = fastify({ logger: false });
 
-  // Request body validation is handled at the control-plane layer via Zod schemas.
-  // Errors bubble up as descriptive messages; we distinguish 404 from other client errors.
+  // Use typed error classes for HTTP status detection instead of string matching.
   app.setErrorHandler((error, _request, reply) => {
     const message = error instanceof Error ? error.message : String(error);
-    const status = message.includes("not found") ? 404 : 400;
+    const status = error instanceof NotFoundError ? 404 : 400;
     reply.status(status).send({ error: { message } });
   });
 
