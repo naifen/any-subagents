@@ -1,0 +1,147 @@
+# =========================================================
+# Secrets / environment
+# =========================================================
+.env
+.env.*
+*.pem
+*.key
+*.p12
+*.pfx
+secrets/
+credentials.json
+
+# Keep sample env files if you use them
+!.env.example
+!.env.sample
+
+# =========================================================
+# OS / editor junk
+# =========================================================
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.example.json
+.idea/
+*.swp
+*.swo
+
+# =========================================================
+# Logs / temp files
+# =========================================================
+*.log
+logs/
+tmp/
+temp/
+.cache/
+*.tmp
+
+# =========================================================
+# Python
+# =========================================================
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.python-version
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.venv/
+venv/
+env/
+dist/
+build/
+*.egg-info/
+
+# =========================================================
+# Node / JavaScript / TypeScript
+# =========================================================
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+dist/
+build/
+.next/
+.nuxt/
+.svelte-kit/
+coverage/
+*.tsbuildinfo
+
+# =========================================================
+# Agent / AI tool local state
+# (keep this section conservative and customize as needed)
+# =========================================================
+
+# Cursor / editor-local AI state
+.cursor/
+.cursor-cache/
+
+# Claude-related local files (if created in your workflow)
+.claude/
+.claude-cache/
+
+.agents/
+.agents-cache/
+
+# Copilot / AI chat exports / scratch files
+copilot-chat/
+ai-chat/
+ai-notes/
+prompts/private/
+scratch/
+sessions/
+
+# Local agent runs / transcripts / traces
+runs/
+traces/
+transcripts/
+artifacts/
+outputs/
+checkpoints/
+
+# Memory / history / local indexes
+.memory/
+.history/
+.index/
+embeddings/
+vector_store/
+.chroma/
+.faiss/
+qdrant_data/
+
+# =========================================================
+# Data / generated files
+# =========================================================
+*.sqlite
+*.db
+*.parquet
+*.feather
+*.pickle
+*.pkl
+
+# Generated notebooks / reports / exports
+exports/
+reports/generated/
+notebooks/.ipynb_checkpoints/
+
+# =========================================================
+# Archives
+# =========================================================
+*.zip
+*.tar
+*.gz
+*.bz2
+*.7z
+
+# =========================================================
+# Allowlist useful tracked files
+# =========================================================
+!README.md
+!docs/
+!prompts/shared/
