@@ -4,6 +4,12 @@
 
 Accepted.
 
+### v1 Implementation Notes
+
+- The migration system is `CREATE TABLE IF NOT EXISTS` only. There is no
+  version tracking, no `ALTER TABLE` support, and no pre-migration backup or
+  snapshot.
+
 ## Context
 
 The runtime needs durable local state for sessions, task groups, tasks, events,

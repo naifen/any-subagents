@@ -4,6 +4,14 @@
 
 Accepted.
 
+### v1 Implementation Notes
+
+- The `fake` adapter is the only adapter that can run tasks end-to-end. The
+  Codex adapter (`src/adapters/codex.ts`) provides health-check and smoke-test
+  only; `TaskRunner.runAdapter()` throws for any adapter other than `fake`.
+- Worktree retention and cleanup are not implemented. Worktrees accumulate
+  until manually pruned.
+
 ## Context
 
 The tool needs to support 10-20 normal subagents and a theoretical stress

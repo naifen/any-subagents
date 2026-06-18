@@ -29,7 +29,7 @@ Use:
 - Zod as the schema source of truth.
 - Commander.js for the CLI.
 - Fastify for the private daemon API.
-- Pino for structured logging.
+- Pino for structured logging (not yet wired in v1).
 - `better-sqlite3` for SQLite.
 
 ## Rationale

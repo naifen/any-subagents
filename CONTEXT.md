@@ -8,8 +8,10 @@
   updates the session brief, chooses winners, and decides follow-up actions.
 - Subagent: a real LLM agent runtime launched by `any-subagents` to execute one
   delegated task.
-- Control Plane: the local daemon that owns durable state, scheduling,
-  supervision, worktree isolation, artifacts, events, metrics, and aggregation.
+- Control Plane: the local runtime subsystem that coordinates durable state,
+  scheduling, supervision, worktree isolation, artifacts, events, metrics, and
+  aggregation. Delegates scheduling to the Scheduler and attempt execution to
+  the Task Runner.
 - Session: a long-lived teamwork container with a stable base ref, shared brief,
   task groups, budgets, events, logs, artifacts, and merge attempts.
 - Session Brief: the compact orchestrator-maintained shared state for a session:
@@ -30,6 +32,24 @@
 - Harness Directory: the `.any-subagents/` directory written into a task
   worktree with the task envelope, brief snapshot, instructions, schemas,
   result files, and staged artifacts.
+- Scheduler: manages task concurrency — maintains a FIFO queue, dispatches
+  tasks to the Task Runner up to the concurrency limit, and calls
+  finalizeAttempt on unhandled errors.
+- Task Runner: manages the full lifecycle of a single task attempt — worktree
+  creation, harness setup, adapter execution, result parsing, verification,
+  evidence registration, and finalization.
+- Finalize Attempt: the centralised three-step state transition that ends
+  every task attempt: (1) update the attempt record, (2) update the task
+  status, (3) re-derive the group status. All terminal paths route through it.
+- Task Runtime Status: the finite set of statuses a task can reach: `queued`,
+  `running`, `completed`, `blocked`, `failed`, `timed_out`, `cancelled`,
+  `interrupted`, `failed_contract`, `completed_with_failed_verification`.
+- Group Status: the derived aggregate status of a task group: `queued`,
+  `running`, `completed`, `failed`, `cancelled`, `mixed`. Computed by counting
+  task statuses, not by priority ordering.
+- Verification Command: a shell command run by the control plane after an
+  adapter exits to validate the subagent's work. Failure produces
+  `completed_with_failed_verification` rather than `failed`.
 
 ### Avoid
 

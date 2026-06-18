@@ -4,6 +4,13 @@
 
 Accepted.
 
+### v1 Implementation Notes
+
+- v1 MCP and CLI both instantiate `ControlPlane` in-process rather than
+  connecting to a running daemon. The Fastify daemon (`src/daemon/app.ts`)
+  exists and is tested but is not wired as the canonical runtime.
+- Unix sockets and auth-token-protected loopback TCP are not implemented.
+
 ## Context
 
 Orchestrator agents need a standard way to create sessions, submit task groups,
