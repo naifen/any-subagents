@@ -1,7 +1,6 @@
-import { nowIso } from "./time.js";
+import { finalizeAttempt } from "./lifecycle.js";
 import { Store, type StoredTask } from "../db/store.js";
 import { TaskRunner, type RunningAttempt } from "./task-runner.js";
-import { deriveGroupStatus, type TaskRuntimeStatus } from "./status.js";
 import type { Session } from "../schemas/index.js";
 
 export interface SchedulerOptions {
@@ -60,12 +59,13 @@ export class Scheduler {
         .catch((error: unknown) => {
           const latest = this.options.store.getLatestAttemptForTask(task.task_id);
           const message = error instanceof Error ? error.message : String(error);
-          if (latest) {
-            const failed = { ...latest, status: "failed" as const, error: message, updated_at: nowIso(), finished_at: nowIso() };
-            this.options.store.updateAttempt(failed);
-          }
-          this.options.store.updateTaskStatus(task.task_id, "failed");
-          this.updateGroupStatus(task.group_id);
+          finalizeAttempt(this.options.store, {
+            attemptId: latest?.attempt_id,
+            taskId: task.task_id,
+            groupId: task.group_id,
+            status: "failed",
+            error: message
+          });
         })
         .finally(() => {
           this.active.delete(taskId);
@@ -79,13 +79,6 @@ export class Scheduler {
   private async runTask(task: StoredTask): Promise<void> {
     const session = this.options.getSession(task.session_id);
     await this.options.runner.run(task, session);
-    this.updateGroupStatus(task.group_id);
     this.schedule();
-  }
-
-  updateGroupStatus(groupId: string): void {
-    const tasks = this.options.store.listTasks({ group_id: groupId });
-    const status = deriveGroupStatus(tasks.map((task) => task.status as TaskRuntimeStatus));
-    this.options.store.updateGroupStatus(groupId, status);
   }
 }

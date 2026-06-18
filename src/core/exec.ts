@@ -63,14 +63,4 @@ export const execGit = async (args: string[], cwd: string): Promise<ExecResult> 
  * Run a shell command via /bin/sh and return the result.
  */
 export const execShell = async (command: string, cwd: string): Promise<ExecResult> =>
-  new Promise((resolve) => {
-    execFile("/bin/sh", ["-c", command], { cwd }, (error, stdout, stderr) => {
-      if (error) {
-        const exc = error as ExecFileException;
-        const code = typeof exc.code === "number" ? exc.code : 1;
-        resolve({ stdout, stderr, code });
-        return;
-      }
-      resolve({ stdout, stderr, code: 0 });
-    });
-  });
+  execFileResult("/bin/sh", ["-c", command], cwd);

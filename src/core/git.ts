@@ -3,8 +3,6 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { execGit, execRequired } from "./exec.js";
 
-export { execRequired, execGit } from "./exec.js";
-
 export const assertGitRepo = async (repo: string): Promise<void> => {
   await execRequired("git", ["rev-parse", "--show-toplevel"], repo);
 };

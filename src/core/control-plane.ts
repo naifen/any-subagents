@@ -18,6 +18,7 @@ import { definedEntries } from "./defined.js";
 import { assertGitRepo, assertGitRef, createPatch, excludeHarness, parsePorcelainChangedFiles } from "./git.js";
 import { execFileResult, execRequired } from "./exec.js";
 import { NotFoundError } from "./errors.js";
+import { finalizeAttempt } from "./lifecycle.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
 import { failureStatuses, terminalStatuses, type TaskRuntimeStatus } from "./status.js";
@@ -325,34 +326,25 @@ export class ControlPlane {
       if (running) {
         running.cancelled = true;
         running.child.kill("SIGTERM");
-        const attempt = this.store.getAttempt(running.attempt_id);
-        const timestamp = nowIso();
-        if (attempt) {
-          this.store.updateAttempt({
-            ...attempt,
-            status: "cancelled",
-            error: "Task cancelled",
-            updated_at: timestamp,
-            finished_at: timestamp
-          });
-        }
-        this.store.updateTaskStatus(taskId, "cancelled");
-        this.scheduler.updateGroupStatus(task.group_id);
+        finalizeAttempt(this.store, {
+          attemptId: running.attempt_id,
+          taskId,
+          groupId: task.group_id,
+          status: "cancelled",
+          error: "Task cancelled"
+        });
       } else {
-        const timestamp = nowIso();
-        const attempt = this.store.getLatestAttemptForTask(taskId);
-        if (attempt && task.status === "running") {
-          this.store.updateAttempt({
-            ...attempt,
-            status: "cancelled",
-            error: "Task cancelled",
-            updated_at: timestamp,
-            finished_at: timestamp
-          });
-        }
+        const attempt = task.status === "running"
+          ? this.store.getLatestAttemptForTask(taskId)
+          : undefined;
         this.scheduler.removeQueued(taskId);
-        this.store.updateTaskStatus(taskId, "cancelled");
-        this.scheduler.updateGroupStatus(task.group_id);
+        finalizeAttempt(this.store, {
+          attemptId: attempt?.attempt_id,
+          taskId,
+          groupId: task.group_id,
+          status: "cancelled",
+          error: "Task cancelled"
+        });
       }
       cancelled.push(taskId);
     }

@@ -15,7 +15,8 @@ import { newArtifactId, newAttemptId } from "./id.js";
 import { nowIso } from "./time.js";
 import { Store, type StoredArtifact, type StoredAttempt, type StoredTask } from "../db/store.js";
 import { createPatch, excludeHarness } from "./git.js";
-import { execShell } from "./exec.js";
+import { execRequired, execShell } from "./exec.js";
+import { finalizeAttempt } from "./lifecycle.js";
 import { writeHarnessFiles } from "./harness.js";
 import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
 
@@ -84,14 +85,14 @@ export class TaskRunner {
 
     if (this.store.getTask(task.task_id)?.status === "cancelled") {
       await writeFile(logPath, "", { flag: "a" });
-      currentAttempt = {
-        ...currentAttempt,
+      finalizeAttempt(this.store, {
+        attemptId,
+        taskId: task.task_id,
+        groupId: task.group_id,
         status: "cancelled",
-        error: "Task cancelled",
-        updated_at: nowIso(),
-        finished_at: nowIso()
-      };
-      this.store.updateAttempt(currentAttempt);
+        error: "Task cancelled"
+      });
+      currentAttempt = { ...currentAttempt, status: "cancelled" };
       await this.registerEvidence({ session, task, attempt: currentAttempt, worktreePath, logPath });
       return { attemptId, status: "cancelled" };
     }
@@ -129,7 +130,6 @@ export class TaskRunner {
       finished_at: nowIso()
     };
     this.store.updateAttempt(currentAttempt);
-    this.store.updateTaskStatus(task.task_id, status);
     await this.registerEvidence({ session, task, attempt: currentAttempt, worktreePath, logPath });
     this.store.appendEvent({
       type: `task.${status}`,
@@ -140,15 +140,20 @@ export class TaskRunner {
       severity: failureStatuses.has(status) ? "warning" : "info",
       message: `Task finished with status ${status}`
     });
+    finalizeAttempt(this.store, {
+      taskId: task.task_id,
+      groupId: task.group_id,
+      status,
+      ...(error ? { error } : {})
+    });
     return { attemptId, status };
   }
 
   private async createWorktree(session: Session, task: StoredTask): Promise<string> {
-    const { execRequired } = await import("./exec.js");
     await mkdir(this.paths.worktreeRoot, { recursive: true });
     const project = path.basename(session.repo).replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
     const worktreePath = path.join(this.paths.worktreeRoot, `${project}-${task.task_id}`);
-    await execRequired("git", ["worktree", "add", "--detach", worktreePath, task.envelope.base_ref ?? session.base_ref], session.repo);
+    await retry(() => execRequired("git", ["worktree", "add", "--detach", worktreePath, task.envelope.base_ref ?? session.base_ref], session.repo));
     await excludeHarness(worktreePath);
     return worktreePath;
   }
@@ -321,4 +326,18 @@ export class TaskRunner {
 const previewFile = async (filePath: string): Promise<string> => {
   const content = await readFile(filePath, "utf8");
   return content.slice(0, 4_096);
+};
+
+const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
+
+const retry = async <T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 100): Promise<T> => {
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    try {
+      return await fn();
+    } catch (error) {
+      if (attempt === maxAttempts) throw error;
+      await sleep(baseDelayMs * 2 ** (attempt - 1));
+    }
+  }
+  throw new Error("unreachable");
 };

@@ -53,10 +53,85 @@ export interface StoredAttempt {
 export interface StoredArtifact extends Artifact {
   path?: string;
 }
+// ─── Typed row interfaces matching SQLite column types ─────────────────
+// These mirror the CREATE TABLE schemas so that column-name typos in
+// mapper functions are caught at compile time.
 
-interface Row {
-  [key: string]: unknown;
+interface SessionRow {
+  session_id: string;
+  repo: string;
+  base_ref: string;
+  status: string;
+  brief_json: string;
+  brief_revision: number;
+  created_at: string;
+  updated_at: string;
+  metadata_json: string;
 }
+
+interface GroupRow {
+  group_id: string;
+  session_id: string;
+  title: string;
+  status: string;
+  expected_brief_revision: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface TaskRow {
+  task_id: string;
+  session_id: string;
+  group_id: string;
+  status: string;
+  mode: string;
+  goal: string;
+  adapter: string;
+  profile: string;
+  envelope_json: string;
+  latest_attempt_id: string | null;
+  attempt_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+interface AttemptRow {
+  attempt_id: string;
+  task_id: string;
+  attempt_number: number;
+  status: string;
+  worktree_path: string | null;
+  log_path: string | null;
+  result_path: string | null;
+  result_json: string | null;
+  error: string | null;
+  created_at: string;
+  updated_at: string;
+  started_at: string | null;
+  finished_at: string | null;
+}
+
+interface ArtifactRow {
+  artifact_id: string;
+  session_id: string | null;
+  group_id: string | null;
+  task_id: string | null;
+  attempt_id: string | null;
+  type: string;
+  mime_type: string;
+  summary: string;
+  created_at: string;
+  resource_uri: string;
+  size_bytes: number | null;
+  hash: string | null;
+  preview: string | null;
+  path: string | null;
+  metadata_json: string;
+}
+
+/** Parse a nullable JSON column, defaulting to `fallback` when null/empty. */
+const jsonColumn = <T>(value: string | null, fallback: T): T =>
+  value != null && value.length > 0 ? (JSON.parse(value) as T) : fallback;
 
 export class Store {
   private readonly db: Database.Database;
@@ -96,19 +171,19 @@ export class Store {
   }
 
   getSession(sessionId: string): Session | undefined {
-    const row = this.db.prepare("select * from sessions where session_id = ?").get(sessionId) as Row | undefined;
+    const row = this.db.prepare("select * from sessions where session_id = ?").get(sessionId) as SessionRow | undefined;
     if (!row) return undefined;
     return {
       schema_version: "1",
-      session_id: String(row["session_id"]),
-      repo: String(row["repo"]),
-      base_ref: String(row["base_ref"]),
-      status: row["status"] as Session["status"],
-      brief: JSON.parse(String(row["brief_json"])) as SessionBrief,
-      brief_revision: Number(row["brief_revision"]),
-      created_at: String(row["created_at"]),
-      updated_at: String(row["updated_at"]),
-      metadata: JSON.parse(String(row["metadata_json"] ?? "{}")) as Record<string, unknown>
+      session_id: row.session_id,
+      repo: row.repo,
+      base_ref: row.base_ref,
+      status: row.status as Session["status"],
+      brief: JSON.parse(row.brief_json) as SessionBrief,
+      brief_revision: row.brief_revision,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {})
     };
   }
 
@@ -142,7 +217,7 @@ export class Store {
   }
 
   getGroup(groupId: string): StoredGroup | undefined {
-    const row = this.db.prepare("select * from task_groups where group_id = ?").get(groupId) as Row | undefined;
+    const row = this.db.prepare("select * from task_groups where group_id = ?").get(groupId) as GroupRow | undefined;
     return row ? this.mapGroup(row) : undefined;
   }
 
@@ -167,41 +242,42 @@ export class Store {
   }
 
   getTask(taskId: string): StoredTask | undefined {
-    const row = this.db.prepare("select * from tasks where task_id = ?").get(taskId) as Row | undefined;
+    const row = this.db.prepare("select * from tasks where task_id = ?").get(taskId) as TaskRow | undefined;
     return row ? this.mapTask(row) : undefined;
   }
 
   listTasks(filter: { session_id?: string; group_id?: string } = {}): StoredTask[] {
     if (filter.group_id) {
       return (
-        this.db.prepare("select * from tasks where group_id = ? order by created_at, task_id").all(filter.group_id) as Row[]
+        this.db.prepare("select * from tasks where group_id = ? order by created_at, task_id").all(filter.group_id) as TaskRow[]
       ).map((row) => this.mapTask(row));
     }
     if (filter.session_id) {
       return (
-        this.db.prepare("select * from tasks where session_id = ? order by created_at, task_id").all(filter.session_id) as Row[]
+        this.db.prepare("select * from tasks where session_id = ? order by created_at, task_id").all(filter.session_id) as TaskRow[]
       ).map((row) => this.mapTask(row));
     }
-    return (this.db.prepare("select * from tasks order by created_at, task_id").all() as Row[]).map((row) => this.mapTask(row));
+    return (this.db.prepare("select * from tasks order by created_at, task_id").all() as TaskRow[]).map((row) => this.mapTask(row));
   }
 
   updateTaskStatus(taskId: string, status: TaskRuntimeStatus, latestAttemptId?: string): void {
-    const task = this.getTask(taskId);
-    const attemptCount = task?.attempt_count ?? 0;
     this.db
       .prepare(
         `update tasks
          set status = @status,
              latest_attempt_id = coalesce(@latest_attempt_id, latest_attempt_id),
-             attempt_count = @attempt_count,
+             attempt_count = case
+               when @latest_attempt_id is not null and @latest_attempt_id != coalesce(latest_attempt_id, '')
+               then attempt_count + 1
+               else attempt_count
+             end,
              updated_at = @updated_at
          where task_id = @task_id`
       )
       .run({
         task_id: taskId,
         status,
-        latest_attempt_id: latestAttemptId,
-        attempt_count: latestAttemptId && latestAttemptId !== task?.latest_attempt_id ? attemptCount + 1 : attemptCount,
+        latest_attempt_id: latestAttemptId ?? null,
         updated_at: nowIso()
       });
   }
@@ -227,14 +303,14 @@ export class Store {
   }
 
   getAttempt(attemptId: string): StoredAttempt | undefined {
-    const row = this.db.prepare("select * from attempts where attempt_id = ?").get(attemptId) as Row | undefined;
+    const row = this.db.prepare("select * from attempts where attempt_id = ?").get(attemptId) as AttemptRow | undefined;
     return row ? this.mapAttempt(row) : undefined;
   }
 
   getLatestAttemptForTask(taskId: string): StoredAttempt | undefined {
     const row = this.db
       .prepare("select * from attempts where task_id = ? order by attempt_number desc limit 1")
-      .get(taskId) as Row | undefined;
+      .get(taskId) as AttemptRow | undefined;
     return row ? this.mapAttempt(row) : undefined;
   }
 
@@ -305,13 +381,13 @@ export class Store {
       }
     }
     const where = clauses.length > 0 ? `where ${clauses.join(" and ")}` : "";
-    return (this.db.prepare(`select * from artifacts ${where} order by created_at, artifact_id`).all(...values) as Row[]).map((row) =>
+    return (this.db.prepare(`select * from artifacts ${where} order by created_at, artifact_id`).all(...values) as ArtifactRow[]).map((row) =>
       this.mapArtifact(row)
     );
   }
 
   getArtifactByResourceUri(resourceUri: string): StoredArtifact | undefined {
-    const row = this.db.prepare("select * from artifacts where resource_uri = ?").get(resourceUri) as Row | undefined;
+    const row = this.db.prepare("select * from artifacts where resource_uri = ?").get(resourceUri) as ArtifactRow | undefined;
     return row ? this.mapArtifact(row) : undefined;
   }
 
@@ -438,88 +514,75 @@ export class Store {
     `);
   }
 
-  private mapGroup(row: Row): StoredGroup {
+  private mapGroup(row: GroupRow): StoredGroup {
     return {
-      group_id: String(row["group_id"]),
-      session_id: String(row["session_id"]),
-      title: String(row["title"]),
-      status: row["status"] as StoredGroup["status"],
-      expected_brief_revision: Number(row["expected_brief_revision"]),
-      created_at: String(row["created_at"]),
-      updated_at: String(row["updated_at"])
+      group_id: row.group_id,
+      session_id: row.session_id,
+      title: row.title,
+      status: row.status as StoredGroup["status"],
+      expected_brief_revision: row.expected_brief_revision,
+      created_at: row.created_at,
+      updated_at: row.updated_at
     };
   }
 
-  private mapTask(row: Row): StoredTask {
-    const latestAttempt = row["latest_attempt_id"];
+  private mapTask(row: TaskRow): StoredTask {
     return {
-      task_id: String(row["task_id"]),
-      session_id: String(row["session_id"]),
-      group_id: String(row["group_id"]),
-      status: row["status"] as TaskRuntimeStatus,
-      mode: String(row["mode"]),
-      goal: String(row["goal"]),
-      adapter: String(row["adapter"]),
-      profile: String(row["profile"]),
-      envelope: JSON.parse(String(row["envelope_json"])) as TaskEnvelope,
-      attempt_count: Number(row["attempt_count"]),
-      created_at: String(row["created_at"]),
-      updated_at: String(row["updated_at"]),
-      ...(typeof latestAttempt === "string" ? { latest_attempt_id: latestAttempt } : {})
+      task_id: row.task_id,
+      session_id: row.session_id,
+      group_id: row.group_id,
+      status: row.status as TaskRuntimeStatus,
+      mode: row.mode,
+      goal: row.goal,
+      adapter: row.adapter,
+      profile: row.profile,
+      envelope: JSON.parse(row.envelope_json) as TaskEnvelope,
+      attempt_count: row.attempt_count,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      ...(row.latest_attempt_id != null ? { latest_attempt_id: row.latest_attempt_id } : {})
     };
   }
 
-  private mapAttempt(row: Row): StoredAttempt {
-    const resultJson = row["result_json"];
-    const worktreePath = row["worktree_path"];
-    const logPath = row["log_path"];
-    const resultPath = row["result_path"];
-    const error = row["error"];
-    const startedAt = row["started_at"];
-    const finishedAt = row["finished_at"];
+  private mapAttempt(row: AttemptRow): StoredAttempt {
     return {
-      attempt_id: String(row["attempt_id"]),
-      task_id: String(row["task_id"]),
-      attempt_number: Number(row["attempt_number"]),
-      status: row["status"] as TaskRuntimeStatus,
-      created_at: String(row["created_at"]),
-      updated_at: String(row["updated_at"]),
-      ...(typeof worktreePath === "string" ? { worktree_path: worktreePath } : {}),
-      ...(typeof logPath === "string" ? { log_path: logPath } : {}),
-      ...(typeof resultPath === "string" ? { result_path: resultPath } : {}),
-      ...(typeof resultJson === "string" && resultJson.length > 0 ? { result: JSON.parse(resultJson) as ResultEnvelope } : {}),
-      ...(typeof error === "string" ? { error } : {}),
-      ...(typeof startedAt === "string" ? { started_at: startedAt } : {}),
-      ...(typeof finishedAt === "string" ? { finished_at: finishedAt } : {})
+      attempt_id: row.attempt_id,
+      task_id: row.task_id,
+      attempt_number: row.attempt_number,
+      status: row.status as TaskRuntimeStatus,
+      created_at: row.created_at,
+      updated_at: row.updated_at,
+      ...(row.worktree_path != null ? { worktree_path: row.worktree_path } : {}),
+      ...(row.log_path != null ? { log_path: row.log_path } : {}),
+      ...(row.result_path != null ? { result_path: row.result_path } : {}),
+      ...(row.result_json != null && row.result_json.length > 0 ? { result: JSON.parse(row.result_json) as ResultEnvelope } : {}),
+      ...(row.error != null ? { error: row.error } : {}),
+      ...(row.started_at != null ? { started_at: row.started_at } : {}),
+      ...(row.finished_at != null ? { finished_at: row.finished_at } : {})
     };
   }
 
-  private mapArtifact(row: Row): StoredArtifact {
-    const metadataJson = row["metadata_json"];
-    const sizeBytes = row["size_bytes"];
-    const hash = row["hash"];
-    const preview = row["preview"];
-    const localPath = row["path"];
+  private mapArtifact(row: ArtifactRow): StoredArtifact {
     const scope = {
-      ...(typeof row["session_id"] === "string" ? { session_id: String(row["session_id"]) } : {}),
-      ...(typeof row["group_id"] === "string" ? { group_id: String(row["group_id"]) } : {}),
-      ...(typeof row["task_id"] === "string" ? { task_id: String(row["task_id"]) } : {}),
-      ...(typeof row["attempt_id"] === "string" ? { attempt_id: String(row["attempt_id"]) } : {})
+      ...(row.session_id != null ? { session_id: row.session_id } : {}),
+      ...(row.group_id != null ? { group_id: row.group_id } : {}),
+      ...(row.task_id != null ? { task_id: row.task_id } : {}),
+      ...(row.attempt_id != null ? { attempt_id: row.attempt_id } : {})
     };
     return {
       schema_version: "1",
-      artifact_id: String(row["artifact_id"]),
+      artifact_id: row.artifact_id,
       scope,
-      type: row["type"] as StoredArtifact["type"],
-      mime_type: String(row["mime_type"]),
-      summary: String(row["summary"]),
-      created_at: String(row["created_at"]),
-      resource_uri: String(row["resource_uri"]),
-      metadata: typeof metadataJson === "string" ? (JSON.parse(metadataJson) as Record<string, unknown>) : {},
-      ...(typeof sizeBytes === "number" ? { size_bytes: sizeBytes } : {}),
-      ...(typeof hash === "string" ? { hash } : {}),
-      ...(typeof preview === "string" ? { preview } : {}),
-      ...(typeof localPath === "string" ? { path: localPath } : {})
+      type: row.type as StoredArtifact["type"],
+      mime_type: row.mime_type,
+      summary: row.summary,
+      created_at: row.created_at,
+      resource_uri: row.resource_uri,
+      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {}),
+      ...(row.size_bytes != null ? { size_bytes: row.size_bytes } : {}),
+      ...(row.hash != null ? { hash: row.hash } : {}),
+      ...(row.preview != null ? { preview: row.preview } : {}),
+      ...(row.path != null ? { path: row.path } : {})
     };
   }
 }
