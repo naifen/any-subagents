@@ -1,5 +1,5 @@
 import type { Store, StoredGroup } from "../db/store.js";
-import { failureStatuses } from "../domain/status.js";
+import { countTaskStatuses } from "../domain/status.js";
 
 export interface SessionDigest {
   session_id: string;
@@ -8,6 +8,7 @@ export interface SessionDigest {
     queued: number;
     running: number;
     completed: number;
+    blocked: number;
     failed: number;
     cancelled: number;
   };
@@ -16,6 +17,7 @@ export interface SessionDigest {
 
 export const buildSessionDigest = (store: Store, sessionId: string): SessionDigest => {
   const tasks = store.listTasks({ session_id: sessionId });
+  const counts = countTaskStatuses(tasks.map((task) => task.status));
   const groups = [...new Set(tasks.map((task) => task.group_id))]
     .map((groupId) => store.getGroup(groupId))
     .filter((group): group is StoredGroup => group !== undefined)
@@ -24,11 +26,12 @@ export const buildSessionDigest = (store: Store, sessionId: string): SessionDige
     session_id: sessionId,
     summary: {
       total: tasks.length,
-      queued: tasks.filter((task) => task.status === "queued").length,
-      running: tasks.filter((task) => task.status === "running").length,
-      completed: tasks.filter((task) => task.status === "completed").length,
-      failed: tasks.filter((task) => failureStatuses.has(task.status)).length,
-      cancelled: tasks.filter((task) => task.status === "cancelled").length
+      queued: counts.queued,
+      running: counts.running,
+      completed: counts.completed,
+      blocked: counts.blocked,
+      failed: counts.failed,
+      cancelled: counts.cancelled
     },
     groups
   };
