@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
 import type { RuntimePaths } from "../storage/paths.js";
 import {
   resultEnvelopeSchema,
@@ -18,14 +17,21 @@ import { createPatch, excludeHarness } from "./git.js";
 import { execRequired, execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
 import { writeHarnessFiles } from "./harness.js";
+import {
+  appendCodexJsonlLines,
+  CODEX_COMMAND,
+  flushCodexJsonlBuffer
+} from "../adapters/codex-events.js";
+import {
+  buildCodexArgs,
+  renderCodexPrompt,
+  synthesizeResult
+} from "../adapters/codex.js";
+import type { SessionBrief } from "../schemas/index.js";
 import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
+import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
 
-export interface RunningAttempt {
-  child: ChildProcess;
-  attempt_id: string;
-  cancelled: boolean;
-  timedOut: boolean;
-}
+export type { RunningAttempt };
 
 export interface RunTaskResult {
   attemptId: string;
@@ -97,7 +103,14 @@ export class TaskRunner {
       return { attemptId, status: "cancelled" };
     }
 
-    const runResult = await this.runAdapter({ task, attemptId, worktreePath, logPath });
+    const runResult = await this.runAdapter({
+      task,
+      sessionBrief: session.brief,
+      attemptId,
+      worktreePath,
+      logPath,
+      resultPath
+    });
     this.running.delete(task.task_id);
 
     let status: TaskRuntimeStatus;
@@ -111,6 +124,18 @@ export class TaskRunner {
       status = "timed_out";
       error = "Task timed out";
     } else {
+      if (task.adapter === "codex" && runResult.codexJsonlLines) {
+        // Harness-owned path (ADR 0007): the Codex adapter synthesizes result.json here.
+        // codex exec is not instructed to write this file.
+        const result = synthesizeResult({
+          taskId: task.task_id,
+          attemptId,
+          mode: task.envelope.mode,
+          exitCode: runResult.exitCode,
+          jsonlLines: runResult.codexJsonlLines
+        });
+        await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
+      }
       const parsed = await this.parseResultFile(resultPath, task.task_id, attemptId);
       if (parsed.ok) {
         parsedResult = parsed.result;
@@ -160,43 +185,71 @@ export class TaskRunner {
 
   private async runAdapter(input: {
     task: StoredTask;
+    sessionBrief: SessionBrief;
+    attemptId: string;
+    worktreePath: string;
+    logPath: string;
+    resultPath: string;
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null; codexJsonlLines?: string[] }> {
+    if (input.task.adapter === "codex") {
+      return this.runCodexAdapter(input);
+    }
+    if (input.task.adapter === "fake") {
+      return this.runFakeAdapter(input);
+    }
+    throw new Error(`Unsupported adapter: ${input.task.adapter}`);
+  }
+
+  private async runFakeAdapter(input: {
+    task: StoredTask;
     attemptId: string;
     worktreePath: string;
     logPath: string;
   }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
-    if (input.task.adapter !== "fake") {
-      throw new Error(`Unsupported adapter: ${input.task.adapter}`);
-    }
-
-    const logStream = createWriteStream(input.logPath, { flags: "a" });
-    const child = spawn(process.execPath, [path.join(input.worktreePath, ".any-subagents", "fake-adapter.mjs")], {
+    return spawnSupervised(this.running, {
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      command: process.execPath,
+      args: [path.join(input.worktreePath, ".any-subagents", "fake-adapter.mjs")],
       cwd: input.worktreePath,
-      env: {
-        ...process.env,
-        ANY_SUBAGENTS_ATTEMPT_ID: input.attemptId
-      },
-      stdio: ["ignore", "pipe", "pipe"]
+      logPath: input.logPath,
+      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms })
     });
-    child.stdout?.pipe(logStream, { end: false });
-    child.stderr?.pipe(logStream, { end: false });
-    const running: RunningAttempt = { child, attempt_id: input.attemptId, cancelled: false, timedOut: false };
-    this.running.set(input.task.task_id, running);
+  }
 
-    const timeoutMs = input.task.envelope.timeout_ms;
-    const timer =
-      timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            running.timedOut = true;
-            child.kill("SIGTERM");
-          }, timeoutMs);
-
-    const exitCode = await new Promise<number | null>((resolve) => {
-      child.on("exit", (code) => resolve(code));
+  private async runCodexAdapter(input: {
+    task: StoredTask;
+    sessionBrief: SessionBrief;
+    attemptId: string;
+    worktreePath: string;
+    logPath: string;
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null; codexJsonlLines: string[] }> {
+    const prompt = renderCodexPrompt(input.task.envelope, input.sessionBrief);
+    const args = buildCodexArgs({
+      worktreePath: input.worktreePath,
+      ...(input.task.envelope.model ? { model: input.task.envelope.model } : {}),
+      ...(input.task.envelope.reasoning_level ? { reasoning_level: input.task.envelope.reasoning_level } : {}),
+      prompt
     });
-    if (timer) clearTimeout(timer);
-    await new Promise<void>((resolve) => logStream.end(resolve));
-    return { cancelled: running.cancelled, timedOut: running.timedOut, exitCode };
+
+    const jsonlLines: string[] = [];
+    let jsonlBuffer = "";
+    const spawnResult = await spawnSupervised(this.running, {
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      command: CODEX_COMMAND,
+      args,
+      cwd: input.worktreePath,
+      logPath: input.logPath,
+      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms }),
+      captureStdout: (chunk) => {
+        const parsed = appendCodexJsonlLines(jsonlBuffer, chunk);
+        jsonlBuffer = parsed.buffer;
+        jsonlLines.push(...parsed.lines);
+      }
+    });
+    jsonlLines.push(...flushCodexJsonlBuffer(jsonlBuffer));
+    return { ...spawnResult, codexJsonlLines: jsonlLines };
   }
 
   private async parseResultFile(resultPath: string, taskId: string, attemptId: string): Promise<
