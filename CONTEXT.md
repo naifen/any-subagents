@@ -32,9 +32,31 @@
 - Harness Directory: the `.any-subagents/` directory written into a task
   worktree with the task envelope, brief snapshot, instructions, schemas,
   result files, and staged artifacts.
-- Scheduler: manages task concurrency — maintains a FIFO queue, dispatches
-  tasks to the Task Runner up to the concurrency limit, and calls
-  finalizeAttempt on unhandled errors.
+- Scheduler: manages task concurrency — maintains a priority-ordered queue
+  (higher priority first, FIFO as tie-breaker), dispatches tasks to the Task
+  Runner up to the configured limits, and calls finalizeAttempt on unhandled
+  errors. (Per ADR-0008; the original implementation was FIFO-only.)
+- Priority Inheritance: priority resolution where an unset task priority falls
+  back to its task group's, then to its session's. Higher numbers run first.
+- Resource Limit: a configured ceiling on concurrent attempts at the global,
+  provider, repo, group, or task level. Distinct from a Budget (token/cost).
+- Budget Exhaustion Policy: what a task group does when its budget is spent —
+  `stop_starting` (let running attempts finish) or `cancel_running`.
+- Interrupted: the terminal status applied to an attempt that was `running` when
+  the daemon restarted. Evidence is preserved; the orchestrator decides retry.
+- Redaction: best-effort replacement of secrets (and optionally sensitive
+  paths) with `[redacted]` before storage. Documented as imperfect and NOT a
+  security boundary.
+- Skill Path / Skill Mount: a configured external skill directory mounted
+  read-only into a worktree — symlink by default, copy opt-in. External
+  absolute paths require user allowlisting. Native global/user skill discovery
+  is inherited from the host environment, not mounted.
+- Export Bundle: an export-only directory of session JSON plus an optional
+  Markdown summary, with configurable log/artifact inclusion. There is no
+  import.
+- Metric: a local-only measurement (queue wait, task duration, adapter
+  failures, retries, verification outcome, reported usage) stored in SQLite. No
+  telemetry leaves the machine.
 - Task Runner: manages the full lifecycle of a single task attempt — worktree
   creation, harness setup, adapter execution, result parsing, verification,
   evidence registration, and finalization.
