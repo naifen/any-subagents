@@ -216,15 +216,6 @@ export class ControlPlane {
     };
   }
 
-  /** @deprecated Use `getTaskResult(input, { audience: "public" })`. */
-  async getTaskResultPublic(input: { task_id: string; attempt_id?: string }): Promise<{
-    task: TaskSummary;
-    attempt: StoredAttempt;
-    result?: ResultEnvelope;
-  }> {
-    return this.getTaskResult(input, { audience: "public" });
-  }
-
   async getTaskLogs(input: { task_id: string; attempt_id?: string; max_bytes?: number }): Promise<{
     task_id: string;
     attempt_id: string;

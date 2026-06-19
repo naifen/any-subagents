@@ -20,7 +20,7 @@ If the binary is not on your `PATH`, use the absolute path to the built entry po
 {
   "mcpServers": {
     "any-subagents": {
-      "command": "node",
+      "command": "/opt/homebrew/bin/node", # use the node which better-sqlite3 is built with
       "args": ["/absolute/path/to/any-subagents/dist/mcp.js"]
     }
   }

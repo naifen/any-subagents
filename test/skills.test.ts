@@ -52,7 +52,6 @@ describe("skills", () => {
       envelope,
       brief: { goal: "g", constraints: [], decisions: [], accepted_findings: [], rejected_paths: [], open_questions: [] },
       attemptId: "att_test",
-      verificationCommands: envelope.verification_commands,
       mountedSkills: ["/tmp/skills/demo"]
     });
     const instructions = await readFile(path.join(harnessDir, "instructions.md"), "utf8");

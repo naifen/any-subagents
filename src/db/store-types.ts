@@ -27,9 +27,6 @@ export interface EventInput {
   data?: Record<string, unknown>;
 }
 
-/** @deprecated Use `EventInput`. */
-export type PendingEvent = EventInput;
-
 export interface StoredMetric {
   metric_id: string;
   name: string;

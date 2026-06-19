@@ -1,8 +1,7 @@
 import type Database from "better-sqlite3";
 import { newMetricId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
-import { buildWhereClause } from "./query-helpers.js";
-import { jsonColumn } from "./json-column.js";
+import { buildWhereClause, jsonColumn } from "./query-helpers.js";
 import type { MetricRow, RecordMetricInput, StoredMetric } from "./store-types.js";
 
 const mapMetric = (row: MetricRow): StoredMetric => ({

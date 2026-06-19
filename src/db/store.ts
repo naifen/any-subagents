@@ -8,13 +8,11 @@ import { runMigrations } from "./migrations.js";
 import * as eventStore from "./events.js";
 import * as metricStore from "./metrics.js";
 import * as attemptStore from "./attempts.js";
-import { buildWhereClause } from "./query-helpers.js";
-import { jsonColumn } from "./json-column.js";
-import type { EventInput, PendingEvent, RecoverInterruptedResult, RecordMetricInput, StoredAttempt, StoredEvent, StoredMetric } from "./store-types.js";
+import { buildWhereClause, jsonColumn } from "./query-helpers.js";
+import type { EventInput, RecoverInterruptedResult, RecordMetricInput, StoredAttempt, StoredEvent, StoredMetric } from "./store-types.js";
 
 export type {
   EventInput,
-  PendingEvent,
   RecordMetricInput,
   RecoverInterruptedResult,
   StoredAttempt,
@@ -112,9 +110,6 @@ interface ArtifactRow {
   metadata_json: string;
 }
 
-/** Parse a nullable JSON column, defaulting to `fallback` when null/empty. */
-const parseJsonColumn = jsonColumn;
-
 export class Store {
   private readonly db: Database.Database;
 
@@ -166,7 +161,7 @@ export class Store {
       brief_revision: row.brief_revision,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      metadata: parseJsonColumn<Record<string, unknown>>(row.metadata_json, {}),
+      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {}),
       ...(row.priority != null ? { priority: row.priority } : {})
     };
   }
@@ -406,7 +401,7 @@ export class Store {
       summary: row.summary,
       created_at: row.created_at,
       resource_uri: row.resource_uri,
-      metadata: parseJsonColumn<Record<string, unknown>>(row.metadata_json, {}),
+      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {}),
       ...(row.size_bytes != null ? { size_bytes: row.size_bytes } : {}),
       ...(row.hash != null ? { hash: row.hash } : {}),
       ...(row.preview != null ? { preview: row.preview } : {}),

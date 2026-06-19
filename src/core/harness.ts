@@ -14,7 +14,6 @@ export interface HarnessInput {
   envelope: TaskEnvelope;
   brief: SessionBrief;
   attemptId: string;
-  verificationCommands?: TaskEnvelope["verification_commands"];
   mountedSkills?: string[];
   config?: AppConfig;
   paths?: RuntimePaths;
@@ -67,8 +66,8 @@ ${brief.open_questions.map((item) => `- ${item}`).join("\n")}
 const renderInstructions = (input: HarnessInput): string => {
   const task = input.envelope;
   const verificationLines =
-    input.verificationCommands && input.verificationCommands.length > 0
-      ? `\nVerification commands (prioritise these over exploratory work):\n${input.verificationCommands
+    task.verification_commands && task.verification_commands.length > 0
+      ? `\nVerification commands (prioritise these over exploratory work):\n${task.verification_commands
           .map((command) => `- ${typeof command === "string" ? command : command.command}`)
           .join("\n")}\n`
       : "";

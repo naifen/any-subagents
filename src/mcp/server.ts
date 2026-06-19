@@ -1,7 +1,7 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import type { ControlPlane } from "../core/control-plane.js";
-import { forAudience } from "../core/audience.js";
+import { toPublicMergeResult } from "../core/audience.js";
 import { publicSchemas, sessionBriefSchema, type SessionBrief } from "../schemas/index.js";
 import {
   mcpCancelTasksSchema,
@@ -184,7 +184,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     },
     async (input) => {
       const merge = await plane.mergeTasks(input);
-      return jsonResult(forAudience.mergeResult(merge, "public"));
+      return jsonResult(toPublicMergeResult(merge));
     }
   );
 

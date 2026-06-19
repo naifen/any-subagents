@@ -112,7 +112,6 @@ export class TaskRunner {
       envelope: task.envelope,
       brief: session.brief,
       attemptId,
-      verificationCommands: task.envelope.verification_commands,
       mountedSkills,
       config: this.config,
       paths: this.paths
