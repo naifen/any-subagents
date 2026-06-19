@@ -2,6 +2,7 @@ import { Command } from "commander";
 import type { ControlPlane } from "../core/control-plane.js";
 import { definedEntries } from "../core/defined.js";
 import { smokeCodexAdapter } from "../adapters/codex.js";
+import { CODEX_COMMAND } from "../adapters/codex-events.js";
 
 export interface CliOptions {
   plane: ControlPlane;
@@ -147,7 +148,7 @@ export const createCli = ({ plane, stdout = (text) => process.stdout.write(text)
       if (adapter !== "codex") {
         throw new Error(`Unsupported smoke adapter: ${adapter}`);
       }
-      writePayload(await smokeCodexAdapter({ command: options.command ?? "codex" }), options.json === true, stdout);
+      writePayload(await smokeCodexAdapter({ command: options.command ?? CODEX_COMMAND }), options.json === true, stdout);
     });
 
   program

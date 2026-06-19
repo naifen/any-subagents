@@ -21,6 +21,8 @@ import { NotFoundError } from "./errors.js";
 import { finalizeAttempt } from "./lifecycle.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
+import { checkCodexAdapterHealth, type CodexHealth } from "../adapters/codex.js";
+import { CODEX_COMMAND } from "../adapters/codex-events.js";
 import { failureStatuses, terminalStatuses, type TaskRuntimeStatus } from "./status.js";
 
 export interface ControlPlaneOptions {
@@ -50,6 +52,8 @@ export interface SubmitTaskGroupInput {
     constraints?: string[];
     verification_commands?: TaskEnvelope["verification_commands"];
     timeout_ms?: number;
+    model?: string;
+    reasoning_level?: TaskEnvelope["reasoning_level"];
     metadata?: Record<string, unknown>;
   }>;
 }
@@ -69,9 +73,13 @@ export interface TaskSummary {
 
 export const createControlPlane = (options: ControlPlaneOptions): ControlPlane => new ControlPlane(options);
 
+const codexUnavailableMessage = "Codex CLI not available";
+const codexHealthTtlMs = 30_000;
+
 export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
+  private codexHealthCache?: { probedAt: number; health: Promise<CodexHealth> };
 
   constructor(private readonly options: ControlPlaneOptions) {
     this.store = new Store(options.paths.dbPath);
@@ -207,6 +215,8 @@ export class ControlPlane {
         constraints: taskInput.constraints,
         verification_commands: taskInput.verification_commands,
         timeout_ms: taskInput.timeout_ms,
+        model: taskInput.model,
+        reasoning_level: taskInput.reasoning_level,
         metadata: taskInput.metadata ?? {}
       });
     });
@@ -422,12 +432,13 @@ export class ControlPlane {
     return {
       adapters: [
         { name: "fake", profiles: ["default"], supports_model_selection: false },
-        { name: "codex", profiles: [], supports_model_selection: true }
+        { name: "codex", profiles: ["default"], supports_model_selection: true }
       ]
     };
   }
 
   async getEffectiveConfig(): Promise<EffectiveConfig> {
+    const codexHealth = await this.probeCodexHealth();
     return {
       schema_version: schemaVersion,
       storage: {
@@ -453,8 +464,10 @@ export class ControlPlane {
           supports_skill_paths: false
         },
         codex: {
-          available: false,
-          reason: "Codex adapter command/profile is not configured in this slice",
+          available: codexHealth.available,
+          ...(codexHealth.available
+            ? { version: codexHealth.version }
+            : { reason: codexHealth.reason ?? codexUnavailableMessage }),
           supports_native_skills: true,
           supports_skill_paths: true
         }
@@ -493,7 +506,14 @@ export class ControlPlane {
       message: "Required storage directories are present"
     });
     checks.push({ name: "fake_adapter", status: "pass", message: "Fake adapter is built in" });
-    checks.push({ name: "codex_adapter", status: "warn", message: "Codex adapter is not configured in this slice" });
+    const codexHealth = await this.probeCodexHealth();
+    checks.push({
+      name: "codex_adapter",
+      status: codexHealth.available ? "pass" : "warn",
+      message: codexHealth.available
+        ? `Codex CLI available (${codexHealth.version ?? "unknown version"})`
+        : (codexHealth.reason ?? codexUnavailableMessage)
+    });
 
     return {
       status: checks.some((check) => check.status === "fail") ? "degraded" : "healthy",
@@ -519,6 +539,16 @@ export class ControlPlane {
     const attempt = attemptId ? this.store.getAttempt(attemptId) : this.store.getLatestAttemptForTask(taskId);
     if (!attempt) throw new NotFoundError("Attempt", `for task ${taskId}`);
     return attempt;
+  }
+
+  private probeCodexHealth(): Promise<CodexHealth> {
+    // Dedupe the probe across config + doctor within one request, but expire it
+    // so a long-lived daemon reflects Codex being installed/upgraded after boot.
+    const now = Date.now();
+    if (!this.codexHealthCache || now - this.codexHealthCache.probedAt > codexHealthTtlMs) {
+      this.codexHealthCache = { probedAt: now, health: checkCodexAdapterHealth({ command: CODEX_COMMAND }) };
+    }
+    return this.codexHealthCache.health;
   }
 }
 

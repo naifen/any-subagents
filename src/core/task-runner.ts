@@ -2,7 +2,6 @@ import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { spawn, type ChildProcess } from "node:child_process";
 import type { RuntimePaths } from "../storage/paths.js";
 import {
   resultEnvelopeSchema,
@@ -18,14 +17,26 @@ import { createPatch, excludeHarness } from "./git.js";
 import { execRequired, execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
 import { writeHarnessFiles } from "./harness.js";
+import {
+  appendCodexJsonlLines,
+  CODEX_COMMAND,
+  flushCodexJsonlBuffer
+} from "../adapters/codex-events.js";
+import {
+  buildCodexArgs,
+  renderCodexPrompt,
+  synthesizeResult
+} from "../adapters/codex.js";
+import type { SessionBrief } from "../schemas/index.js";
 import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
+import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
 
-export interface RunningAttempt {
-  child: ChildProcess;
-  attempt_id: string;
-  cancelled: boolean;
-  timedOut: boolean;
-}
+export type { RunningAttempt };
+
+const knownAdapters = ["fake", "codex"] as const;
+type KnownAdapter = (typeof knownAdapters)[number];
+const isKnownAdapter = (adapter: string): adapter is KnownAdapter =>
+  (knownAdapters as readonly string[]).includes(adapter);
 
 export interface RunTaskResult {
   attemptId: string;
@@ -97,8 +108,14 @@ export class TaskRunner {
       return { attemptId, status: "cancelled" };
     }
 
-    const runResult = await this.runAdapter({ task, attemptId, worktreePath, logPath });
-    this.running.delete(task.task_id);
+    const runResult = await this.runAdapter({
+      task,
+      sessionBrief: session.brief,
+      attemptId,
+      worktreePath,
+      logPath,
+      resultPath
+    });
 
     let status: TaskRuntimeStatus;
     let parsedResult: ResultEnvelope | undefined;
@@ -160,43 +177,94 @@ export class TaskRunner {
 
   private async runAdapter(input: {
     task: StoredTask;
+    sessionBrief: SessionBrief;
+    attemptId: string;
+    worktreePath: string;
+    logPath: string;
+    resultPath: string;
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
+    // `adapter` is an open string by design (provider-neutral), so narrow to the
+    // set this harness implements before an exhaustive switch guarantees that a
+    // newly listed adapter cannot be silently left unhandled.
+    if (!isKnownAdapter(input.task.adapter)) {
+      throw new Error(`Unsupported adapter: ${input.task.adapter}`);
+    }
+    switch (input.task.adapter) {
+      case "codex":
+        return this.runCodexAdapter(input);
+      case "fake":
+        return this.runFakeAdapter(input);
+      default: {
+        const unhandled: never = input.task.adapter;
+        throw new Error(`Unsupported adapter: ${String(unhandled)}`);
+      }
+    }
+  }
+
+  private async runFakeAdapter(input: {
+    task: StoredTask;
     attemptId: string;
     worktreePath: string;
     logPath: string;
   }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
-    if (input.task.adapter !== "fake") {
-      throw new Error(`Unsupported adapter: ${input.task.adapter}`);
-    }
-
-    const logStream = createWriteStream(input.logPath, { flags: "a" });
-    const child = spawn(process.execPath, [path.join(input.worktreePath, ".any-subagents", "fake-adapter.mjs")], {
+    return spawnSupervised(this.running, {
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      command: process.execPath,
+      args: [path.join(input.worktreePath, ".any-subagents", "fake-adapter.mjs")],
       cwd: input.worktreePath,
-      env: {
-        ...process.env,
-        ANY_SUBAGENTS_ATTEMPT_ID: input.attemptId
-      },
-      stdio: ["ignore", "pipe", "pipe"]
+      logPath: input.logPath,
+      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms })
     });
-    child.stdout?.pipe(logStream, { end: false });
-    child.stderr?.pipe(logStream, { end: false });
-    const running: RunningAttempt = { child, attempt_id: input.attemptId, cancelled: false, timedOut: false };
-    this.running.set(input.task.task_id, running);
+  }
 
-    const timeoutMs = input.task.envelope.timeout_ms;
-    const timer =
-      timeoutMs === undefined
-        ? undefined
-        : setTimeout(() => {
-            running.timedOut = true;
-            child.kill("SIGTERM");
-          }, timeoutMs);
-
-    const exitCode = await new Promise<number | null>((resolve) => {
-      child.on("exit", (code) => resolve(code));
+  private async runCodexAdapter(input: {
+    task: StoredTask;
+    sessionBrief: SessionBrief;
+    attemptId: string;
+    worktreePath: string;
+    logPath: string;
+    resultPath: string;
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
+    const prompt = renderCodexPrompt(input.task.envelope, input.sessionBrief);
+    const args = buildCodexArgs({
+      worktreePath: input.worktreePath,
+      ...(input.task.envelope.model ? { model: input.task.envelope.model } : {}),
+      ...(input.task.envelope.reasoning_level ? { reasoning_level: input.task.envelope.reasoning_level } : {}),
+      prompt
     });
-    if (timer) clearTimeout(timer);
-    await new Promise<void>((resolve) => logStream.end(resolve));
-    return { cancelled: running.cancelled, timedOut: running.timedOut, exitCode };
+
+    const jsonlLines: string[] = [];
+    let jsonlBuffer = "";
+    const spawnResult = await spawnSupervised(this.running, {
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      command: CODEX_COMMAND,
+      args,
+      cwd: input.worktreePath,
+      logPath: input.logPath,
+      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms }),
+      captureStdout: (chunk) => {
+        const parsed = appendCodexJsonlLines(jsonlBuffer, chunk);
+        jsonlBuffer = parsed.buffer;
+        jsonlLines.push(...parsed.lines);
+      }
+    });
+    jsonlLines.push(...flushCodexJsonlBuffer(jsonlBuffer));
+
+    // Harness-owned path (ADR 0007): the Codex adapter synthesizes result.json
+    // itself so the shared finalization path can treat every adapter uniformly.
+    // codex exec is not instructed to write this file.
+    const result = synthesizeResult({
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      mode: input.task.envelope.mode,
+      exitCode: spawnResult.exitCode,
+      jsonlLines
+    });
+    await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
+
+    return spawnResult;
   }
 
   private async parseResultFile(resultPath: string, taskId: string, attemptId: string): Promise<
