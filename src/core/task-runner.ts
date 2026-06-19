@@ -33,6 +33,11 @@ import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
 
 export type { RunningAttempt };
 
+const knownAdapters = ["fake", "codex"] as const;
+type KnownAdapter = (typeof knownAdapters)[number];
+const isKnownAdapter = (adapter: string): adapter is KnownAdapter =>
+  (knownAdapters as readonly string[]).includes(adapter);
+
 export interface RunTaskResult {
   attemptId: string;
   status: TaskRuntimeStatus;
@@ -111,7 +116,6 @@ export class TaskRunner {
       logPath,
       resultPath
     });
-    this.running.delete(task.task_id);
 
     let status: TaskRuntimeStatus;
     let parsedResult: ResultEnvelope | undefined;
@@ -124,18 +128,6 @@ export class TaskRunner {
       status = "timed_out";
       error = "Task timed out";
     } else {
-      if (task.adapter === "codex" && runResult.codexJsonlLines) {
-        // Harness-owned path (ADR 0007): the Codex adapter synthesizes result.json here.
-        // codex exec is not instructed to write this file.
-        const result = synthesizeResult({
-          taskId: task.task_id,
-          attemptId,
-          mode: task.envelope.mode,
-          exitCode: runResult.exitCode,
-          jsonlLines: runResult.codexJsonlLines
-        });
-        await writeFile(resultPath, `${JSON.stringify(result, null, 2)}\n`);
-      }
       const parsed = await this.parseResultFile(resultPath, task.task_id, attemptId);
       if (parsed.ok) {
         parsedResult = parsed.result;
@@ -190,14 +182,23 @@ export class TaskRunner {
     worktreePath: string;
     logPath: string;
     resultPath: string;
-  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null; codexJsonlLines?: string[] }> {
-    if (input.task.adapter === "codex") {
-      return this.runCodexAdapter(input);
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
+    // `adapter` is an open string by design (provider-neutral), so narrow to the
+    // set this harness implements before an exhaustive switch guarantees that a
+    // newly listed adapter cannot be silently left unhandled.
+    if (!isKnownAdapter(input.task.adapter)) {
+      throw new Error(`Unsupported adapter: ${input.task.adapter}`);
     }
-    if (input.task.adapter === "fake") {
-      return this.runFakeAdapter(input);
+    switch (input.task.adapter) {
+      case "codex":
+        return this.runCodexAdapter(input);
+      case "fake":
+        return this.runFakeAdapter(input);
+      default: {
+        const unhandled: never = input.task.adapter;
+        throw new Error(`Unsupported adapter: ${String(unhandled)}`);
+      }
     }
-    throw new Error(`Unsupported adapter: ${input.task.adapter}`);
   }
 
   private async runFakeAdapter(input: {
@@ -223,7 +224,8 @@ export class TaskRunner {
     attemptId: string;
     worktreePath: string;
     logPath: string;
-  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null; codexJsonlLines: string[] }> {
+    resultPath: string;
+  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
     const prompt = renderCodexPrompt(input.task.envelope, input.sessionBrief);
     const args = buildCodexArgs({
       worktreePath: input.worktreePath,
@@ -249,7 +251,20 @@ export class TaskRunner {
       }
     });
     jsonlLines.push(...flushCodexJsonlBuffer(jsonlBuffer));
-    return { ...spawnResult, codexJsonlLines: jsonlLines };
+
+    // Harness-owned path (ADR 0007): the Codex adapter synthesizes result.json
+    // itself so the shared finalization path can treat every adapter uniformly.
+    // codex exec is not instructed to write this file.
+    const result = synthesizeResult({
+      taskId: input.task.task_id,
+      attemptId: input.attemptId,
+      mode: input.task.envelope.mode,
+      exitCode: spawnResult.exitCode,
+      jsonlLines
+    });
+    await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
+
+    return spawnResult;
   }
 
   private async parseResultFile(resultPath: string, taskId: string, attemptId: string): Promise<

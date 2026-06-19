@@ -2,46 +2,39 @@ import { z } from "zod";
 
 export const CODEX_COMMAND = "codex";
 
-export const codexUsageSchema = z
-  .object({
-    input_tokens: z.number(),
-    cached_input_tokens: z.number().optional(),
-    output_tokens: z.number(),
-    reasoning_output_tokens: z.number().optional()
-  })
-  .strict();
+// Codex `exec --json` is an external, evolving surface. These schemas validate
+// only the fields we consume and tolerate unmodeled ones, so a new field never
+// silently discards a whole event.
+export const codexUsageSchema = z.object({
+  input_tokens: z.number(),
+  cached_input_tokens: z.number().optional(),
+  output_tokens: z.number(),
+  reasoning_output_tokens: z.number().optional()
+});
 
-export const codexFileUpdateChangeSchema = z
-  .object({
-    path: z.string().min(1),
-    kind: z.string().min(1)
-  })
-  .strict();
+export const codexFileUpdateChangeSchema = z.object({
+  path: z.string().min(1),
+  kind: z.string().min(1)
+});
 
-export const codexThreadItemSchema = z
-  .object({
-    id: z.string().optional(),
-    type: z.string().optional(),
-    item_type: z.string().optional(),
-    text: z.string().optional(),
-    changes: z.array(z.unknown()).optional(),
-    status: z.string().optional()
-  })
-  .strict();
+export const codexThreadItemSchema = z.object({
+  id: z.string().optional(),
+  type: z.string().optional(),
+  item_type: z.string().optional(),
+  text: z.string().optional(),
+  changes: z.array(z.unknown()).optional(),
+  status: z.string().optional()
+});
 
-export const codexItemCompletedEventSchema = z
-  .object({
-    type: z.literal("item.completed"),
-    item: codexThreadItemSchema
-  })
-  .strict();
+export const codexItemCompletedEventSchema = z.object({
+  type: z.literal("item.completed"),
+  item: codexThreadItemSchema
+});
 
-export const codexTurnCompletedEventSchema = z
-  .object({
-    type: z.literal("turn.completed"),
-    usage: codexUsageSchema
-  })
-  .strict();
+export const codexTurnCompletedEventSchema = z.object({
+  type: z.literal("turn.completed"),
+  usage: codexUsageSchema
+});
 
 export const codexThreadEventSchema = z.discriminatedUnion("type", [
   codexItemCompletedEventSchema,
@@ -52,8 +45,10 @@ export type CodexUsage = z.infer<typeof codexUsageSchema>;
 export type CodexThreadItem = z.infer<typeof codexThreadItemSchema>;
 export type CodexThreadEvent = z.infer<typeof codexThreadEventSchema>;
 
+const stripCr = (line: string): string => line.replace(/\r$/, "");
+
 export const parseCodexJsonlLine = (line: string): CodexThreadEvent | undefined => {
-  const trimmed = line.replace(/\r$/, "");
+  const trimmed = stripCr(line);
   if (trimmed.length === 0) return undefined;
   let parsed: unknown;
   try {
@@ -84,11 +79,11 @@ export const appendCodexJsonlLines = (buffer: string, chunk: string): { buffer: 
   const combined = buffer + chunk;
   const parts = combined.split("\n");
   const nextBuffer = parts.pop() ?? "";
-  const lines = parts.filter((line) => line.replace(/\r$/, "").trim().length > 0);
+  const lines = parts.filter((line) => stripCr(line).trim().length > 0);
   return { buffer: nextBuffer, lines };
 };
 
 export const flushCodexJsonlBuffer = (buffer: string): string[] => {
-  const trimmed = buffer.replace(/\r$/, "").trim();
+  const trimmed = stripCr(buffer).trim();
   return trimmed.length > 0 ? [trimmed] : [];
 };

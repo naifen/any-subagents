@@ -66,16 +66,18 @@ export const spawnSupervised = async (
 
   const exitCode = await new Promise<number | null>((resolve) => {
     let settled = false;
+    // spawnSupervised owns the running-map entry it created above: it is removed
+    // here on every exit path (close or spawn error) so callers never have to.
     const settle = (code: number | null) => {
       if (settled) return;
       settled = true;
       if (timer) clearTimeout(timer);
+      running.delete(input.taskId);
       resolve(code);
     };
 
     child.on("error", (err: NodeJS.ErrnoException) => {
       logStream.write(`spawn error: ${err.message}\n`);
-      running.delete(input.taskId);
       settle(1);
     });
     child.on("close", (code) => settle(code));

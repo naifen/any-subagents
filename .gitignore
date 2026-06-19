@@ -117,6 +117,7 @@ vector_store/
 qdrant_data/
 
 skills-lock.json
+.serena/
 
 # =========================================================
 # Data / generated files

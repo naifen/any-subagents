@@ -87,6 +87,8 @@ export const smokeCodexAdapter = async (config: CodexAdapterConfig): Promise<Cod
   };
 };
 
+const noAgentMessagesSummary = "Codex completed without agent messages.";
+
 const mapReasoningLevel = (level: string): string => {
   // Codex `model_reasoning_effort` accepts minimal, low, medium, high, and xhigh.
   if (level === "max") return "xhigh";
@@ -188,7 +190,7 @@ export const synthesizeResult = (input: SynthesizeResultInput): ResultEnvelope =
   const lastAgentMessage = agentMessages.at(-1);
   const exitFailure = `Codex exited with code ${input.exitCode ?? "unknown"}.`;
   const summary = succeeded
-    ? (lastAgentMessage ?? "Codex completed without agent messages.")
+    ? (lastAgentMessage ?? noAgentMessagesSummary)
     : lastAgentMessage
       ? `${exitFailure} Last agent message: ${lastAgentMessage}`
       : exitFailure;
@@ -219,7 +221,7 @@ export const synthesizeResult = (input: SynthesizeResultInput): ResultEnvelope =
   const findings =
     agentMessages.length > 0
       ? agentMessages.map((text) => ({ summary: text }))
-      : [{ summary: succeeded ? "Codex completed without agent messages." : summary }];
+      : [{ summary: succeeded ? noAgentMessagesSummary : summary }];
 
   return { ...base, findings };
 };

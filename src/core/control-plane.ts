@@ -74,11 +74,12 @@ export interface TaskSummary {
 export const createControlPlane = (options: ControlPlaneOptions): ControlPlane => new ControlPlane(options);
 
 const codexUnavailableMessage = "Codex CLI not available";
+const codexHealthTtlMs = 30_000;
 
 export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
-  private codexHealthCache?: Promise<CodexHealth>;
+  private codexHealthCache?: { probedAt: number; health: Promise<CodexHealth> };
 
   constructor(private readonly options: ControlPlaneOptions) {
     this.store = new Store(options.paths.dbPath);
@@ -541,8 +542,13 @@ export class ControlPlane {
   }
 
   private probeCodexHealth(): Promise<CodexHealth> {
-    this.codexHealthCache ??= checkCodexAdapterHealth({ command: CODEX_COMMAND });
-    return this.codexHealthCache;
+    // Dedupe the probe across config + doctor within one request, but expire it
+    // so a long-lived daemon reflects Codex being installed/upgraded after boot.
+    const now = Date.now();
+    if (!this.codexHealthCache || now - this.codexHealthCache.probedAt > codexHealthTtlMs) {
+      this.codexHealthCache = { probedAt: now, health: checkCodexAdapterHealth({ command: CODEX_COMMAND }) };
+    }
+    return this.codexHealthCache.health;
   }
 }
 
