@@ -77,7 +77,22 @@
       "type": "string",
       "minLength": 1
     },
+    "requested_model": {
+      "type": "string",
+      "minLength": 1
+    },
     "reasoning_level": {
+      "type": "string",
+      "enum": [
+        "minimal",
+        "low",
+        "medium",
+        "high",
+        "xhigh",
+        "max"
+      ]
+    },
+    "requested_reasoning_level": {
       "type": "string",
       "enum": [
         "minimal",

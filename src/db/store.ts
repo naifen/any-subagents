@@ -1,12 +1,24 @@
 import { mkdir } from "node:fs/promises";
 import path from "node:path";
 import Database from "better-sqlite3";
-import type { Artifact, ResultEnvelope, Session, SessionBrief, TaskEnvelope } from "../schemas/index.js";
-import { newEventId } from "../core/id.js";
-import { nowIso } from "../core/time.js";
-import type { GroupStatus, TaskRuntimeStatus } from "../core/status.js";
+import type { Artifact, Session, SessionBrief, TaskEnvelope } from "../schemas/index.js";
+import { nowIso } from "../util/time.js";
+import type { GroupStatus, TaskRuntimeStatus } from "../domain/status.js";
+import { runMigrations } from "./migrations.js";
+import * as eventStore from "./events.js";
+import * as metricStore from "./metrics.js";
+import * as attemptStore from "./attempts.js";
+import { buildWhereClause, jsonColumn } from "./query-helpers.js";
+import type { EventInput, RecoverInterruptedResult, RecordMetricInput, StoredAttempt, StoredEvent, StoredMetric } from "./store-types.js";
 
-export type { TaskRuntimeStatus, GroupStatus } from "../core/status.js";
+export type {
+  EventInput,
+  RecordMetricInput,
+  RecoverInterruptedResult,
+  StoredAttempt,
+  StoredEvent,
+  StoredMetric
+} from "./store-types.js";
 
 export interface StoredTask {
   task_id: string;
@@ -34,22 +46,6 @@ export interface StoredGroup {
   updated_at: string;
 }
 
-export interface StoredAttempt {
-  attempt_id: string;
-  task_id: string;
-  attempt_number: number;
-  status: TaskRuntimeStatus;
-  worktree_path?: string;
-  log_path?: string;
-  result_path?: string;
-  result?: ResultEnvelope;
-  error?: string;
-  created_at: string;
-  updated_at: string;
-  started_at?: string;
-  finished_at?: string;
-}
-
 export interface StoredArtifact extends Artifact {
   path?: string;
 }
@@ -67,6 +63,7 @@ interface SessionRow {
   created_at: string;
   updated_at: string;
   metadata_json: string;
+  priority: number | null;
 }
 
 interface GroupRow {
@@ -95,22 +92,6 @@ interface TaskRow {
   updated_at: string;
 }
 
-interface AttemptRow {
-  attempt_id: string;
-  task_id: string;
-  attempt_number: number;
-  status: string;
-  worktree_path: string | null;
-  log_path: string | null;
-  result_path: string | null;
-  result_json: string | null;
-  error: string | null;
-  created_at: string;
-  updated_at: string;
-  started_at: string | null;
-  finished_at: string | null;
-}
-
 interface ArtifactRow {
   artifact_id: string;
   session_id: string | null;
@@ -128,10 +109,6 @@ interface ArtifactRow {
   path: string | null;
   metadata_json: string;
 }
-
-/** Parse a nullable JSON column, defaulting to `fallback` when null/empty. */
-const jsonColumn = <T>(value: string | null, fallback: T): T =>
-  value != null && value.length > 0 ? (JSON.parse(value) as T) : fallback;
 
 export class Store {
   private readonly db: Database.Database;
@@ -159,14 +136,15 @@ export class Store {
     this.db
       .prepare(
         `insert into sessions
-          (session_id, repo, base_ref, status, brief_json, brief_revision, created_at, updated_at, metadata_json)
+          (session_id, repo, base_ref, status, brief_json, brief_revision, created_at, updated_at, metadata_json, priority)
          values
-          (@session_id, @repo, @base_ref, @status, @brief_json, @brief_revision, @created_at, @updated_at, @metadata_json)`
+          (@session_id, @repo, @base_ref, @status, @brief_json, @brief_revision, @created_at, @updated_at, @metadata_json, @priority)`
       )
       .run({
         ...session,
         brief_json: JSON.stringify(session.brief),
-        metadata_json: JSON.stringify(session.metadata ?? {})
+        metadata_json: JSON.stringify(session.metadata ?? {}),
+        priority: session.priority ?? null
       });
   }
 
@@ -183,7 +161,8 @@ export class Store {
       brief_revision: row.brief_revision,
       created_at: row.created_at,
       updated_at: row.updated_at,
-      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {})
+      metadata: jsonColumn<Record<string, unknown>>(row.metadata_json, {}),
+      ...(row.priority != null ? { priority: row.priority } : {})
     };
   }
 
@@ -283,64 +262,19 @@ export class Store {
   }
 
   insertAttempt(attempt: StoredAttempt): void {
-    this.db
-      .prepare(
-        `insert into attempts
-          (attempt_id, task_id, attempt_number, status, worktree_path, log_path, result_path, result_json, error, created_at, updated_at, started_at, finished_at)
-         values
-          (@attempt_id, @task_id, @attempt_number, @status, @worktree_path, @log_path, @result_path, @result_json, @error, @created_at, @updated_at, @started_at, @finished_at)`
-      )
-      .run({
-        ...attempt,
-        worktree_path: attempt.worktree_path,
-        log_path: attempt.log_path,
-        result_path: attempt.result_path,
-        result_json: attempt.result ? JSON.stringify(attempt.result) : null,
-        error: attempt.error ?? null,
-        started_at: attempt.started_at ?? null,
-        finished_at: attempt.finished_at ?? null
-      });
+    attemptStore.insertAttempt(this.db, attempt);
   }
 
   getAttempt(attemptId: string): StoredAttempt | undefined {
-    const row = this.db.prepare("select * from attempts where attempt_id = ?").get(attemptId) as AttemptRow | undefined;
-    return row ? this.mapAttempt(row) : undefined;
+    return attemptStore.getAttempt(this.db, attemptId);
   }
 
   getLatestAttemptForTask(taskId: string): StoredAttempt | undefined {
-    const row = this.db
-      .prepare("select * from attempts where task_id = ? order by attempt_number desc limit 1")
-      .get(taskId) as AttemptRow | undefined;
-    return row ? this.mapAttempt(row) : undefined;
+    return attemptStore.getLatestAttemptForTask(this.db, taskId);
   }
 
   updateAttempt(attempt: StoredAttempt): void {
-    this.db
-      .prepare(
-        `update attempts
-         set status = @status,
-             worktree_path = @worktree_path,
-             log_path = @log_path,
-             result_path = @result_path,
-             result_json = @result_json,
-             error = @error,
-             updated_at = @updated_at,
-             started_at = @started_at,
-             finished_at = @finished_at
-         where attempt_id = @attempt_id`
-      )
-      .run({
-        attempt_id: attempt.attempt_id,
-        status: attempt.status,
-        worktree_path: attempt.worktree_path ?? null,
-        log_path: attempt.log_path ?? null,
-        result_path: attempt.result_path ?? null,
-        result_json: attempt.result ? JSON.stringify(attempt.result) : null,
-        error: attempt.error ?? null,
-        updated_at: attempt.updated_at,
-        started_at: attempt.started_at ?? null,
-        finished_at: attempt.finished_at ?? null
-      });
+    attemptStore.updateAttempt(this.db, attempt);
   }
 
   insertArtifact(artifact: StoredArtifact): void {
@@ -371,16 +305,7 @@ export class Store {
   }
 
   listArtifacts(filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string }): StoredArtifact[] {
-    const clauses: string[] = [];
-    const values: string[] = [];
-    for (const key of ["session_id", "group_id", "task_id", "attempt_id"] as const) {
-      const value = filter[key];
-      if (value) {
-        clauses.push(`${key} = ?`);
-        values.push(value);
-      }
-    }
-    const where = clauses.length > 0 ? `where ${clauses.join(" and ")}` : "";
+    const { where, values } = buildWhereClause(filter, ["session_id", "group_id", "task_id", "attempt_id"] as const);
     return (this.db.prepare(`select * from artifacts ${where} order by created_at, artifact_id`).all(...values) as ArtifactRow[]).map((row) =>
       this.mapArtifact(row)
     );
@@ -391,127 +316,43 @@ export class Store {
     return row ? this.mapArtifact(row) : undefined;
   }
 
-  appendEvent(input: {
-    type: string;
-    session_id?: string;
-    group_id?: string;
-    task_id?: string;
-    attempt_id?: string;
-    artifact_id?: string;
-    severity?: "debug" | "info" | "warning" | "error";
-    message?: string;
-    data?: Record<string, unknown>;
-  }): void {
-    this.db
-      .prepare(
-        `insert into events
-          (event_id, type, created_at, session_id, group_id, task_id, attempt_id, artifact_id, severity, message, data_json)
-         values
-          (@event_id, @type, @created_at, @session_id, @group_id, @task_id, @attempt_id, @artifact_id, @severity, @message, @data_json)`
-      )
-      .run({
-        event_id: newEventId(),
-        type: input.type,
-        created_at: nowIso(),
-        session_id: input.session_id ?? null,
-        group_id: input.group_id ?? null,
-        task_id: input.task_id ?? null,
-        attempt_id: input.attempt_id ?? null,
-        artifact_id: input.artifact_id ?? null,
-        severity: input.severity ?? null,
-        message: input.message ?? null,
-        data_json: JSON.stringify(input.data ?? {})
-      });
+  getArtifactById(artifactId: string): StoredArtifact | undefined {
+    const row = this.db.prepare("select * from artifacts where artifact_id = ?").get(artifactId) as ArtifactRow | undefined;
+    return row ? this.mapArtifact(row) : undefined;
+  }
+
+  listEvents(filter: { session_id?: string; group_id?: string; task_id?: string; type?: string } = {}): StoredEvent[] {
+    return eventStore.listEvents(this.db, filter);
+  }
+
+  listAttemptsByStatus(status: TaskRuntimeStatus): StoredAttempt[] {
+    return attemptStore.listAttemptsByStatus(this.db, status);
+  }
+
+  listQueuedTaskIds(): string[] {
+    return (this.db.prepare("select task_id from tasks where status = 'queued' order by created_at, task_id").all() as Array<{ task_id: string }>).map(
+      (row) => row.task_id
+    );
+  }
+
+  recordMetric(input: RecordMetricInput & { metric_id?: string; created_at?: string }): void {
+    metricStore.recordMetric(this.db, input);
+  }
+
+  queryMetrics(filter: { name?: string; session_id?: string; task_id?: string; limit?: number } = {}): StoredMetric[] {
+    return metricStore.queryMetrics(this.db, filter);
+  }
+
+  appendEvents(events: EventInput[]): void {
+    eventStore.appendEvents(this.db, events);
+  }
+
+  appendEvent(input: EventInput): void {
+    eventStore.appendEvent(this.db, input);
   }
 
   private migrate(): void {
-    this.db.exec(`
-      create table if not exists sessions (
-        session_id text primary key,
-        repo text not null,
-        base_ref text not null,
-        status text not null,
-        brief_json text not null,
-        brief_revision integer not null,
-        created_at text not null,
-        updated_at text not null,
-        metadata_json text not null
-      );
-
-      create table if not exists task_groups (
-        group_id text primary key,
-        session_id text not null references sessions(session_id) on delete cascade,
-        title text not null,
-        status text not null,
-        expected_brief_revision integer not null,
-        created_at text not null,
-        updated_at text not null
-      );
-
-      create table if not exists tasks (
-        task_id text primary key,
-        session_id text not null references sessions(session_id) on delete cascade,
-        group_id text not null references task_groups(group_id) on delete cascade,
-        status text not null,
-        mode text not null,
-        goal text not null,
-        adapter text not null,
-        profile text not null,
-        envelope_json text not null,
-        latest_attempt_id text,
-        attempt_count integer not null,
-        created_at text not null,
-        updated_at text not null
-      );
-
-      create table if not exists attempts (
-        attempt_id text primary key,
-        task_id text not null references tasks(task_id) on delete cascade,
-        attempt_number integer not null,
-        status text not null,
-        worktree_path text,
-        log_path text,
-        result_path text,
-        result_json text,
-        error text,
-        created_at text not null,
-        updated_at text not null,
-        started_at text,
-        finished_at text
-      );
-
-      create table if not exists artifacts (
-        artifact_id text primary key,
-        session_id text,
-        group_id text,
-        task_id text,
-        attempt_id text,
-        type text not null,
-        mime_type text not null,
-        summary text not null,
-        created_at text not null,
-        resource_uri text not null unique,
-        size_bytes integer,
-        hash text,
-        preview text,
-        path text,
-        metadata_json text not null
-      );
-
-      create table if not exists events (
-        event_id text primary key,
-        type text not null,
-        created_at text not null,
-        session_id text,
-        group_id text,
-        task_id text,
-        attempt_id text,
-        artifact_id text,
-        severity text,
-        message text,
-        data_json text
-      );
-    `);
+    runMigrations(this.db, this.dbPath);
   }
 
   private mapGroup(row: GroupRow): StoredGroup {
@@ -541,24 +382,6 @@ export class Store {
       created_at: row.created_at,
       updated_at: row.updated_at,
       ...(row.latest_attempt_id != null ? { latest_attempt_id: row.latest_attempt_id } : {})
-    };
-  }
-
-  private mapAttempt(row: AttemptRow): StoredAttempt {
-    return {
-      attempt_id: row.attempt_id,
-      task_id: row.task_id,
-      attempt_number: row.attempt_number,
-      status: row.status as TaskRuntimeStatus,
-      created_at: row.created_at,
-      updated_at: row.updated_at,
-      ...(row.worktree_path != null ? { worktree_path: row.worktree_path } : {}),
-      ...(row.log_path != null ? { log_path: row.log_path } : {}),
-      ...(row.result_path != null ? { result_path: row.result_path } : {}),
-      ...(row.result_json != null && row.result_json.length > 0 ? { result: JSON.parse(row.result_json) as ResultEnvelope } : {}),
-      ...(row.error != null ? { error: row.error } : {}),
-      ...(row.started_at != null ? { started_at: row.started_at } : {}),
-      ...(row.finished_at != null ? { finished_at: row.finished_at } : {})
     };
   }
 

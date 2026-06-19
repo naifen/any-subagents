@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { createCli } from "../src/cli/program.js";
-import { createControlPlane } from "../src/core/control-plane.js";
+import { createTestControlPlane } from "../src/test-support/control-plane.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 import { createTempGitRepo } from "../src/test-support/git.js";
 const planes: Array<{ close: () => Promise<void> }> = [];
@@ -12,7 +12,7 @@ afterEach(async () => {
 describe("CLI", () => {
   test("creates sessions with JSON output", async () => {
     const repo = await createTempGitRepo();
-    const plane = createControlPlane({ paths: await createTestRuntimePaths(), maxConcurrency: 1 });
+    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
     planes.push(plane);
     const output: string[] = [];
     const errors: string[] = [];

@@ -1,61 +1,59 @@
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { stat } from "node:fs/promises";
 import path from "node:path";
 import type { RuntimePaths } from "../storage/paths.js";
 import {
   schemaVersion,
   sessionBriefSchema,
-  taskEnvelopeSchema,
   type ResultEnvelope,
   type Session,
   type SessionBrief,
   type TaskEnvelope,
-  type EffectiveConfig
+  type EffectiveConfig,
+  type CreateSessionInput
 } from "../schemas/index.js";
-import { newSessionId, newTaskGroupId, newTaskId } from "./id.js";
-import { nowIso } from "./time.js";
-import { Store, type StoredArtifact, type StoredAttempt, type StoredGroup, type StoredTask } from "../db/store.js";
-import { definedEntries } from "./defined.js";
-import { assertGitRepo, assertGitRef, createPatch, excludeHarness, parsePorcelainChangedFiles } from "./git.js";
-import { execFileResult, execRequired } from "./exec.js";
+import { adapterDefinitions } from "../adapters/registry.js";
+import { buildEffectiveConfig } from "../config/effective-config.js";
+import { newSessionId } from "../util/id.js";
+import { nowIso } from "../util/time.js";
+import {
+  Store,
+  type StoredArtifact,
+  type StoredAttempt,
+  type StoredEvent,
+  type StoredGroup,
+  type StoredMetric,
+  type StoredTask
+} from "../db/store.js";
+import { definedEntries } from "../util/defined.js";
+import { assertCleanRepo, assertGitRepo, assertGitRef } from "./git.js";
+import { execFileResult } from "./exec.js";
 import { NotFoundError } from "./errors.js";
-import { finalizeAttempt } from "./lifecycle.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
 import { checkCodexAdapterHealth, type CodexHealth } from "../adapters/codex.js";
 import { CODEX_COMMAND } from "../adapters/codex-events.js";
-import { failureStatuses, terminalStatuses, type TaskRuntimeStatus } from "./status.js";
+import { terminalStatuses, type TaskRuntimeStatus } from "../domain/status.js";
+import { defaultConfig, type AppConfig } from "../config/schema.js";
+import { normalizeConfig } from "../config/normalize.js";
+import { forAudience, type ResultAudience } from "./audience.js";
+import { buildSessionDigest } from "./session-digest.js";
+import { exportSessionBundle } from "./session-export.js";
+import { createMetricsRecorder } from "./metrics-recorder.js";
+import { readLogPreview } from "./log-preview.js";
+import {
+  buildTaskGroupSubmission,
+  persistTaskGroupSubmission,
+  type SubmitTaskGroupInput
+} from "./submit-task-group.js";
+import { recoverInterruptedAttempts } from "./recover-interrupted.js";
+import { mergeAttempts } from "./merge-attempts.js";
+import type { RunningAttempt } from "./task-runner.js";
+
+export type { SubmitTaskGroupInput, CreateSessionInput };
 
 export interface ControlPlaneOptions {
   paths: RuntimePaths;
-  maxConcurrency?: number;
-}
-
-export interface CreateSessionInput {
-  repo: string;
-  base_ref: string;
-  brief?: Partial<SessionBrief>;
-  metadata?: Record<string, unknown>;
-}
-
-export interface SubmitTaskGroupInput {
-  session_id: string;
-  title: string;
-  expected_brief_revision: number;
-  ignore_revision_conflict?: boolean;
-  tasks: Array<{
-    mode: TaskEnvelope["mode"];
-    goal: string;
-    adapter: string;
-    profile: string;
-    success_criteria: string[];
-    scope?: TaskEnvelope["scope"];
-    constraints?: string[];
-    verification_commands?: TaskEnvelope["verification_commands"];
-    timeout_ms?: number;
-    model?: string;
-    reasoning_level?: TaskEnvelope["reasoning_level"];
-    metadata?: Record<string, unknown>;
-  }>;
+  config?: AppConfig;
 }
 
 export interface TaskSummary {
@@ -79,19 +77,29 @@ const codexHealthTtlMs = 30_000;
 export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
+  private readonly config: AppConfig;
   private codexHealthCache?: { probedAt: number; health: Promise<CodexHealth> };
 
   constructor(private readonly options: ControlPlaneOptions) {
+    const baseConfig = options.config ?? defaultConfig();
+    this.config = normalizeConfig(baseConfig);
     this.store = new Store(options.paths.dbPath);
-    const running = new Map<string, import("./task-runner.js").RunningAttempt>();
-    const runner = new TaskRunner(this.store, options.paths, running);
+    const running = new Map<string, RunningAttempt>();
+    const metrics = createMetricsRecorder(this.store);
+    const runner = new TaskRunner(this.store, options.paths, running, this.config, metrics);
     this.scheduler = new Scheduler({
       store: this.store,
       runner,
-      maxConcurrency: options.maxConcurrency ?? 4,
+      config: this.config,
       getSession: (id) => this.requireSession(id),
-      running
+      running,
+      metrics
     });
+
+    const recovery = recoverInterruptedAttempts(this.store);
+    if (recovery.queuedTaskIds.length > 0) {
+      this.scheduler.enqueue(recovery.queuedTaskIds);
+    }
   }
 
   async close(): Promise<void> {
@@ -104,6 +112,7 @@ export class ControlPlane {
   async createSession(input: CreateSessionInput): Promise<Session> {
     await assertGitRepo(input.repo);
     await assertGitRef(input.repo, input.base_ref);
+    await assertCleanRepo(input.repo);
 
     const timestamp = nowIso();
     const brief = sessionBriefSchema.parse({
@@ -124,7 +133,8 @@ export class ControlPlane {
       brief_revision: 0,
       created_at: timestamp,
       updated_at: timestamp,
-      metadata: input.metadata ?? {}
+      metadata: input.metadata ?? {},
+      ...(input.priority !== undefined ? { priority: input.priority } : {})
     };
 
     this.store.insertSession(session);
@@ -157,101 +167,26 @@ export class ControlPlane {
     return updated;
   }
 
-  async getSessionDigest(input: { session_id: string }): Promise<{
-    session_id: string;
-    summary: { total: number; queued: number; running: number; completed: number; failed: number; cancelled: number };
-    groups: Array<{ group_id: string; status: StoredGroup["status"] }>;
-  }> {
+  async getSessionDigest(input: { session_id: string }): Promise<ReturnType<typeof buildSessionDigest>> {
     this.requireSession(input.session_id);
-    const tasks = this.store.listTasks({ session_id: input.session_id });
-    const groupsById = new Map(tasks.map((task) => [task.group_id, this.store.getGroup(task.group_id)]));
-    return {
-      session_id: input.session_id,
-      summary: {
-        total: tasks.length,
-        queued: tasks.filter((task) => task.status === "queued").length,
-        running: tasks.filter((task) => task.status === "running").length,
-        completed: tasks.filter((task) => task.status === "completed").length,
-        failed: tasks.filter((task) => failureStatuses.has(task.status)).length,
-        cancelled: tasks.filter((task) => task.status === "cancelled").length
-      },
-      groups: Array.from(groupsById.values())
-        .filter((group): group is StoredGroup => Boolean(group))
-        .map((group) => ({ group_id: group.group_id, status: group.status }))
-    };
+    return buildSessionDigest(this.store, input.session_id);
   }
 
   // ─── Task Group Submission ──────────────────────────────────────
 
   async submitTaskGroup(input: SubmitTaskGroupInput): Promise<StoredGroup> {
     const session = this.requireSession(input.session_id);
-    if (session.brief_revision !== input.expected_brief_revision && input.ignore_revision_conflict !== true) {
+    await assertCleanRepo(session.repo);
+
+    const revisionConflict = session.brief_revision !== input.expected_brief_revision;
+    if (revisionConflict && input.ignore_revision_conflict !== true) {
       throw new Error(`Brief revision conflict: expected ${input.expected_brief_revision}, got ${session.brief_revision}`);
     }
 
-    const timestamp = nowIso();
-    const group: StoredGroup = {
-      group_id: newTaskGroupId(),
-      session_id: session.session_id,
-      title: input.title,
-      status: "queued",
-      expected_brief_revision: input.expected_brief_revision,
-      created_at: timestamp,
-      updated_at: timestamp
-    };
-    const taskInputs = input.tasks.map((taskInput) => {
-      const task_id = newTaskId();
-      return taskEnvelopeSchema.parse({
-        schema_version: schemaVersion,
-        task_id,
-        session_id: session.session_id,
-        group_id: group.group_id,
-        mode: taskInput.mode,
-        goal: taskInput.goal,
-        adapter: taskInput.adapter,
-        profile: taskInput.profile,
-        scope: taskInput.scope,
-        success_criteria: taskInput.success_criteria,
-        constraints: taskInput.constraints,
-        verification_commands: taskInput.verification_commands,
-        timeout_ms: taskInput.timeout_ms,
-        model: taskInput.model,
-        reasoning_level: taskInput.reasoning_level,
-        metadata: taskInput.metadata ?? {}
-      });
-    });
-
-    this.store.inTransaction(() => {
-      this.store.insertGroup(group);
-      for (const envelope of taskInputs) {
-        const task: StoredTask = {
-          task_id: envelope.task_id,
-          session_id: envelope.session_id,
-          group_id: envelope.group_id,
-          status: "queued",
-          mode: envelope.mode,
-          goal: envelope.goal,
-          adapter: envelope.adapter,
-          profile: envelope.profile,
-          envelope,
-          attempt_count: 0,
-          created_at: timestamp,
-          updated_at: timestamp
-        };
-        this.store.insertTask(task);
-        this.store.appendEvent({
-          type: "task.queued",
-          session_id: task.session_id,
-          group_id: task.group_id,
-          task_id: task.task_id,
-          severity: "info",
-          message: "Task queued"
-        });
-      }
-    });
-
-    this.scheduler.enqueue(taskInputs.map((task) => task.task_id));
-    return group;
+    const submission = buildTaskGroupSubmission(this.config, session, input);
+    persistTaskGroupSubmission(this.store, submission);
+    this.scheduler.enqueue(submission.taskInputs.map((task) => task.task_id));
+    return submission.group;
   }
 
   // ─── Task Queries ───────────────────────────────────────────────
@@ -260,11 +195,15 @@ export class ControlPlane {
     return { tasks: this.store.listTasks(filter).map((task) => summarizeTask(task)) };
   }
 
-  async getTaskResult(input: { task_id: string; attempt_id?: string }): Promise<{
+  async getTaskResult(
+    input: { task_id: string; attempt_id?: string },
+    options: { audience?: ResultAudience } = {}
+  ): Promise<{
     task: TaskSummary;
     attempt: StoredAttempt;
     result?: ResultEnvelope;
   }> {
+    const audience = options.audience ?? "internal";
     const task = this.requireTask(input.task_id);
     const attempt = input.attempt_id ? this.store.getAttempt(input.attempt_id) : this.store.getLatestAttemptForTask(task.task_id);
     if (!attempt) {
@@ -272,7 +211,7 @@ export class ControlPlane {
     }
     return {
       task: summarizeTask(task),
-      attempt,
+      attempt: forAudience.attempt(attempt, audience),
       ...(attempt.result ? { result: attempt.result } : {})
     };
   }
@@ -288,35 +227,41 @@ export class ControlPlane {
       return { task_id: input.task_id, attempt_id: attempt.attempt_id, preview: "", truncated: false };
     }
     const maxBytes = input.max_bytes ?? 8_192;
-    const content = await readFile(attempt.log_path, "utf8");
+    const { preview, truncated } = await readLogPreview(attempt.log_path, this.config, maxBytes, this.options.paths);
     return {
       task_id: input.task_id,
       attempt_id: attempt.attempt_id,
-      preview: content.slice(0, maxBytes),
-      truncated: content.length > maxBytes
+      preview,
+      truncated
     };
   }
 
   // ─── Artifacts ──────────────────────────────────────────────────
 
-  async listArtifacts(filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string }): Promise<{
+  async listArtifacts(
+    filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string },
+    options: { audience?: ResultAudience } = {}
+  ): Promise<{
     artifacts: StoredArtifact[];
   }> {
-    return { artifacts: this.store.listArtifacts(filter).map(hideArtifactPath) };
+    const audience = options.audience ?? "public";
+    return { artifacts: this.store.listArtifacts(filter).map((artifact) => forAudience.artifact(artifact, audience)) };
   }
 
-  async getArtifact(input: { artifact_id?: string; resource_uri?: string; include_path?: boolean }): Promise<StoredArtifact> {
+  async getArtifact(
+    input: { artifact_id?: string; resource_uri?: string },
+    options: { audience?: ResultAudience } = {}
+  ): Promise<StoredArtifact> {
     if (!input.artifact_id && !input.resource_uri) {
       throw new Error("Either artifact_id or resource_uri must be provided");
     }
-    const artifacts = input.resource_uri
-      ? [this.store.getArtifactByResourceUri(input.resource_uri)].filter((artifact): artifact is StoredArtifact => Boolean(artifact))
-      : this.store.listArtifacts({});
-    const artifact = input.artifact_id ? artifacts.find((candidate) => candidate.artifact_id === input.artifact_id) : artifacts[0];
+    const artifact = input.artifact_id
+      ? this.store.getArtifactById(input.artifact_id)
+      : this.store.getArtifactByResourceUri(input.resource_uri!);
     if (!artifact) {
       throw new NotFoundError("Artifact", input.artifact_id ?? input.resource_uri ?? "unknown");
     }
-    return input.include_path ? artifact : hideArtifactPath(artifact);
+    return forAudience.artifact(artifact, options.audience ?? "public");
   }
 
   // ─── Cancellation ──────────────────────────────────────────────
@@ -328,37 +273,7 @@ export class ControlPlane {
         .listTasks(definedEntries({ group_id: input.group_id, session_id: input.session_id }))
         .filter((task) => !terminalStatuses.has(task.status))
         .map((task) => task.task_id);
-    const cancelled: string[] = [];
-    for (const taskId of taskIds) {
-      const task = this.store.getTask(taskId);
-      if (!task || terminalStatuses.has(task.status)) continue;
-      const running = this.scheduler.running.get(taskId);
-      if (running) {
-        running.cancelled = true;
-        running.child.kill("SIGTERM");
-        finalizeAttempt(this.store, {
-          attemptId: running.attempt_id,
-          taskId,
-          groupId: task.group_id,
-          status: "cancelled",
-          error: "Task cancelled"
-        });
-      } else {
-        const attempt = task.status === "running"
-          ? this.store.getLatestAttemptForTask(taskId)
-          : undefined;
-        this.scheduler.removeQueued(taskId);
-        finalizeAttempt(this.store, {
-          attemptId: attempt?.attempt_id,
-          taskId,
-          groupId: task.group_id,
-          status: "cancelled",
-          error: "Task cancelled"
-        });
-      }
-      cancelled.push(taskId);
-    }
-    return { cancelled_task_ids: cancelled };
+    return { cancelled_task_ids: this.scheduler.cancelTasks(taskIds) };
   }
 
   // ─── Merge ─────────────────────────────────────────────────────
@@ -372,41 +287,7 @@ export class ControlPlane {
     conflicts: string[];
   }> {
     const session = this.requireSession(input.session_id);
-    const project = path.basename(session.repo).replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
-    const integrationPath = path.join(this.options.paths.worktreeRoot, `${project}-integration-${Date.now()}`);
-    await mkdir(this.options.paths.worktreeRoot, { recursive: true });
-    await execRequired("git", ["worktree", "add", "--detach", integrationPath, session.base_ref], session.repo);
-    await excludeHarness(integrationPath);
-
-    const conflicts: string[] = [];
-    for (const attemptId of input.attempt_ids) {
-      const attempt = this.store.getAttempt(attemptId);
-      if (!attempt?.worktree_path) {
-        conflicts.push(`Attempt ${attemptId} has no worktree evidence`);
-        continue;
-      }
-      const patch = await createPatch(attempt.worktree_path);
-      if (patch.trim().length === 0) continue;
-      const patchPath = path.join(this.options.paths.artifactsDir, input.session_id, "merge", `${attemptId}.patch`);
-      await mkdir(path.dirname(patchPath), { recursive: true });
-      await writeFile(patchPath, patch);
-      const applied = await execFileResult("git", ["apply", "--3way", patchPath], integrationPath);
-      if (applied.code !== 0) {
-        conflicts.push(applied.stderr || applied.stdout || `Attempt ${attemptId} did not apply cleanly`);
-        break;
-      }
-    }
-
-    const changed = await execFileResult("git", ["status", "--porcelain"], integrationPath);
-    const changedFiles = parsePorcelainChangedFiles(changed.stdout);
-    return {
-      status: conflicts.length > 0 ? "conflicted" : "completed",
-      session_id: input.session_id,
-      attempt_ids: input.attempt_ids,
-      integration_worktree_path: integrationPath,
-      changed_files: changedFiles,
-      conflicts
-    };
+    return mergeAttempts({ session, attempt_ids: input.attempt_ids }, { store: this.store, paths: this.options.paths });
   }
 
   // ─── Wait ──────────────────────────────────────────────────────
@@ -426,60 +307,51 @@ export class ControlPlane {
     throw new Error(`Timed out waiting for task group ${groupId}`);
   }
 
+  // ─── Metrics ───────────────────────────────────────────────────
+
+  async getMetrics(filter: { name?: string; session_id?: string; task_id?: string; limit?: number } = {}): Promise<{ metrics: StoredMetric[] }> {
+    return { metrics: this.store.queryMetrics(filter) };
+  }
+
+  listEvents(filter: { session_id?: string; group_id?: string; task_id?: string; type?: string } = {}): { events: StoredEvent[] } {
+    return { events: this.store.listEvents(filter) };
+  }
+
+  // ─── Export ────────────────────────────────────────────────────
+
+  async exportSession(input: { session_id: string; output_dir: string }): Promise<{ output_dir: string; files: string[]; skipped_logs: string[] }> {
+    const session = this.requireSession(input.session_id);
+    return exportSessionBundle(session, input.output_dir, {
+      store: this.store,
+      config: this.config,
+      paths: this.options.paths
+    });
+  }
+
   // ─── Configuration & Diagnostics ──────────────────────────────
 
-  listAdapters(): { adapters: Array<{ name: string; profiles: string[]; supports_model_selection: boolean }> } {
+  listAdapters(): {
+    adapters: Array<{
+      name: string;
+      profiles: string[];
+      supports_model_selection: boolean;
+      supports_native_skills: boolean;
+      supports_skill_paths: boolean;
+      supports_reasoning_levels: boolean;
+    }>;
+  } {
     return {
-      adapters: [
-        { name: "fake", profiles: ["default"], supports_model_selection: false },
-        { name: "codex", profiles: ["default"], supports_model_selection: true }
-      ]
+      adapters: [...adapterDefinitions().values()].map((adapter) => ({
+        name: adapter.name,
+        profiles: Object.keys(this.config.profiles?.[adapter.name] ?? adapter.defaultProfiles),
+        ...adapter.capabilities
+      }))
     };
   }
 
   async getEffectiveConfig(): Promise<EffectiveConfig> {
     const codexHealth = await this.probeCodexHealth();
-    return {
-      schema_version: schemaVersion,
-      storage: {
-        state_dir: this.options.paths.stateDir,
-        db_path: this.options.paths.dbPath,
-        logs_dir: this.options.paths.logsDir,
-        artifacts_dir: this.options.paths.artifactsDir,
-        worktree_root: this.options.paths.worktreeRoot,
-        runtime_dir: this.options.paths.runtimeDir
-      },
-      profiles: {
-        fake: {
-          default: {
-            concurrency: this.options.maxConcurrency ?? 4,
-            timeout_ms: 30_000
-          }
-        }
-      },
-      adapters: {
-        fake: {
-          available: true,
-          supports_native_skills: false,
-          supports_skill_paths: false
-        },
-        codex: {
-          available: codexHealth.available,
-          ...(codexHealth.available
-            ? { version: codexHealth.version }
-            : { reason: codexHealth.reason ?? codexUnavailableMessage }),
-          supports_native_skills: true,
-          supports_skill_paths: true
-        }
-      },
-      security: {
-        preset: "default",
-        stores_provider_secrets: false,
-        path_redaction: false
-      },
-      skill_paths: [],
-      redactions: []
-    };
+    return buildEffectiveConfig(this.config, this.options.paths, codexHealth);
   }
 
   async doctor(): Promise<{
@@ -542,8 +414,6 @@ export class ControlPlane {
   }
 
   private probeCodexHealth(): Promise<CodexHealth> {
-    // Dedupe the probe across config + doctor within one request, but expire it
-    // so a long-lived daemon reflects Codex being installed/upgraded after boot.
     const now = Date.now();
     if (!this.codexHealthCache || now - this.codexHealthCache.probedAt > codexHealthTtlMs) {
       this.codexHealthCache = { probedAt: now, health: checkCodexAdapterHealth({ command: CODEX_COMMAND }) };
@@ -551,8 +421,6 @@ export class ControlPlane {
     return this.codexHealthCache.health;
   }
 }
-
-// ─── Module-Level Helpers ──────────────────────────────────────
 
 const summarizeTask = (task: StoredTask): TaskSummary => ({
   task_id: task.task_id,
@@ -566,11 +434,6 @@ const summarizeTask = (task: StoredTask): TaskSummary => ({
   attempt_count: task.attempt_count,
   ...(task.latest_attempt_id ? { latest_attempt_id: task.latest_attempt_id } : {})
 });
-
-const hideArtifactPath = (artifact: StoredArtifact): StoredArtifact => {
-  const { path: _path, ...publicArtifact } = artifact;
-  return publicArtifact;
-};
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
 

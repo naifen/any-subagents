@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "vitest";
-import { createControlPlane } from "../src/core/control-plane.js";
+import { createTestControlPlane } from "../src/test-support/control-plane.js";
 import { createDaemonApp } from "../src/daemon/app.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 import { createTempGitRepo } from "../src/test-support/git.js";
@@ -14,7 +14,7 @@ afterEach(async () => {
 describe("daemon API", () => {
   test("mirrors the fake adapter control-plane path", async () => {
     const repo = await createTempGitRepo();
-    const plane = createControlPlane({ paths: await createTestRuntimePaths(), maxConcurrency: 1 });
+    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
     planes.push(plane);
     const app = createDaemonApp({ plane });
     apps.push(app);

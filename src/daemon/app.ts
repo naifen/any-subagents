@@ -1,6 +1,6 @@
 import fastify, { type FastifyInstance } from "fastify";
 import type { ControlPlane } from "../core/control-plane.js";
-import { definedEntries } from "../core/defined.js";
+import { definedEntries } from "../util/defined.js";
 import { NotFoundError } from "../core/errors.js";
 
 export interface DaemonAppOptions {
@@ -58,8 +58,9 @@ export const createDaemonApp = ({ plane }: DaemonAppOptions): FastifyInstance =>
   });
 
   app.get("/artifacts/by-uri", async (request) => {
-    const query = request.query as { resource_uri: string; include_path?: string };
-    return plane.getArtifact({ resource_uri: query.resource_uri, include_path: query.include_path === "true" });
+    const query = request.query as { resource_uri: string; audience?: string };
+    const audience = query.audience === "internal" ? "internal" : "public";
+    return plane.getArtifact({ resource_uri: query.resource_uri }, { audience });
   });
 
   app.get("/sessions/:session_id/digest", async (request) => {
@@ -70,6 +71,22 @@ export const createDaemonApp = ({ plane }: DaemonAppOptions): FastifyInstance =>
   app.post("/cancel", async (request) => plane.cancelTasks(request.body as Parameters<ControlPlane["cancelTasks"]>[0]));
 
   app.get("/adapters", async () => plane.listAdapters());
+
+  app.get("/metrics", async (request) => {
+    const query = request.query as { name?: string; session_id?: string; task_id?: string; limit?: string };
+    const filter: { name?: string; session_id?: string; task_id?: string; limit?: number } = {};
+    if (query.name !== undefined) filter.name = query.name;
+    if (query.session_id !== undefined) filter.session_id = query.session_id;
+    if (query.task_id !== undefined) filter.task_id = query.task_id;
+    if (query.limit !== undefined) filter.limit = Number(query.limit);
+    return plane.getMetrics(filter);
+  });
+
+  app.post("/sessions/:session_id/export", async (request) => {
+    const params = request.params as { session_id: string };
+    const body = request.body as { output_dir: string };
+    return plane.exportSession({ session_id: params.session_id, output_dir: body.output_dir });
+  });
 
   return app;
 };

@@ -1,18 +1,7 @@
-import { mkdir } from "node:fs/promises";
-import { createControlPlane } from "../core/control-plane.js";
-import { defaultRuntimePaths } from "../storage/paths.js";
+import { createBootstrappedControlPlane } from "../core/bootstrap.js";
 import { createCli } from "./program.js";
 
-const paths = defaultRuntimePaths();
-await Promise.all([
-  mkdir(paths.stateDir, { recursive: true }),
-  mkdir(paths.logsDir, { recursive: true }),
-  mkdir(paths.artifactsDir, { recursive: true }),
-  mkdir(paths.worktreeRoot, { recursive: true }),
-  mkdir(paths.runtimeDir, { recursive: true })
-]);
-
-const plane = createControlPlane({ paths });
+const plane = await createBootstrappedControlPlane();
 const program = createCli({ plane });
 
 try {

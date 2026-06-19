@@ -2,9 +2,10 @@ import type { JSONRPCMessage } from "@modelcontextprotocol/sdk/types.js";
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import { afterEach, describe, expect, test } from "vitest";
-import { createControlPlane } from "../src/core/control-plane.js";
+import { createTestControlPlane } from "../src/test-support/control-plane.js";
 import { createAnySubagentsMcpServer } from "../src/mcp/server.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
+import { createTempGitRepo } from "../src/test-support/git.js";
 
 const planes: Array<{ close: () => Promise<void> }> = [];
 
@@ -14,7 +15,7 @@ afterEach(async () => {
 
 describe("MCP server", () => {
   test("exposes adapter tools and schema resources without raw local paths", async () => {
-    const plane = createControlPlane({ paths: await createTestRuntimePaths(), maxConcurrency: 1 });
+    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
     planes.push(plane);
     const server = createAnySubagentsMcpServer({ plane });
     const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -37,6 +38,46 @@ describe("MCP server", () => {
     const schemaContent = schema.contents[0];
     expect(schemaContent && "text" in schemaContent ? schemaContent.text : "").toContain("task_id");
     expect(JSON.stringify(adapters.structuredContent)).not.toContain("/Users/");
+
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  test("get_task_result omits local attempt paths", async () => {
+    const repo = await createTempGitRepo();
+    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
+    planes.push(plane);
+    const server = createAnySubagentsMcpServer({ plane });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] = createLinkedTransports();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "MCP path hiding." } });
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Path hiding",
+      expected_brief_revision: session.brief_revision,
+      tasks: [{
+        mode: "research",
+        goal: "Complete without leaking paths.",
+        adapter: "fake",
+        profile: "default",
+        success_criteria: ["Done."]
+      }]
+    });
+    await plane.waitForTaskGroup(group.group_id, 5_000);
+    const tasks = await plane.queryTasks({ group_id: group.group_id });
+    const taskId = tasks.tasks[0]!.task_id;
+
+    const mcpResult = await client.callTool({ name: "get_task_result", arguments: { task_id: taskId } });
+    const attempt = (mcpResult.structuredContent as { attempt: Record<string, unknown> }).attempt;
+    expect(attempt).not.toHaveProperty("worktree_path");
+    expect(attempt).not.toHaveProperty("log_path");
+    expect(attempt).not.toHaveProperty("result_path");
+
+    const cliResult = await plane.getTaskResult({ task_id: taskId });
+    expect(cliResult.attempt.worktree_path).toBeDefined();
+    expect(cliResult.attempt.log_path).toBeDefined();
+    expect(cliResult.attempt.result_path).toBeDefined();
 
     await Promise.all([client.close(), server.close()]);
   });

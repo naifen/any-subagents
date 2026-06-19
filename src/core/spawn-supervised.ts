@@ -8,6 +8,15 @@ export interface RunningAttempt {
   timedOut: boolean;
 }
 
+/** Signal cancellation to a running attempt without plane-level orchestration. */
+export const killRunningAttempt = (running: Map<string, RunningAttempt>, taskId: string): boolean => {
+  const attempt = running.get(taskId);
+  if (!attempt) return false;
+  attempt.cancelled = true;
+  attempt.child.kill("SIGTERM");
+  return true;
+};
+
 export interface SpawnSupervisedInput {
   taskId: string;
   attemptId: string;
