@@ -74,7 +74,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     async ({ task_id, attempt_id }) => {
       const input: { task_id: string; attempt_id?: string } = { task_id };
       if (attempt_id !== undefined) input.attempt_id = attempt_id;
-      return jsonResult(await plane.getTaskResult(input, { audience: "public" }));
+      return jsonResult(await plane.getTaskResult(input));
     }
   );
 
@@ -113,7 +113,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       if (group_id !== undefined) filter.group_id = group_id;
       if (task_id !== undefined) filter.task_id = task_id;
       if (attempt_id !== undefined) filter.attempt_id = attempt_id;
-      return jsonResult(await plane.listArtifacts(filter, { audience: "public" }));
+      return jsonResult(await plane.listArtifacts(filter));
     }
   );
 
@@ -128,7 +128,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       const input: { artifact_id?: string; resource_uri?: string } = {};
       if (artifact_id !== undefined) input.artifact_id = artifact_id;
       if (resource_uri !== undefined) input.resource_uri = resource_uri;
-      return jsonResult(await plane.getArtifact(input, { audience: "public" }));
+      return jsonResult(await plane.getArtifact(input));
     }
   );
 
@@ -256,7 +256,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     async (uri) => {
       const taskId = uri.pathname.split("/")[2];
       if (!taskId) throw new Error("task_id required");
-      const result = await plane.getTaskResult({ task_id: taskId }, { audience: "public" });
+      const result = await plane.getTaskResult({ task_id: taskId });
       return {
         contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(result, null, 2) }]
       };
@@ -274,7 +274,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     async (uri) => {
       const artifactId = uri.pathname.split("/")[2];
       if (!artifactId) throw new Error("artifact_id required");
-      const artifact = await plane.getArtifact({ artifact_id: artifactId }, { audience: "public" });
+      const artifact = await plane.getArtifact({ artifact_id: artifactId });
       return {
         contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(artifact, null, 2) }]
       };

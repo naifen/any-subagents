@@ -158,8 +158,7 @@ export const createCli = ({ plane, stdout = (text) => process.stdout.write(text)
         definedEntries({
           artifact_id: options.artifactId,
           resource_uri: options.resourceUri
-        }) as Parameters<ControlPlane["getArtifact"]>[0],
-        { audience: options.includePath === true ? "internal" : "public" }
+        }) as Parameters<ControlPlane["getArtifact"]>[0]
       );
       writePayload(artifact, options.json === true, stdout);
     });

@@ -44,9 +44,11 @@ describe("MCP server", () => {
 
   test("get_task_result omits local attempt paths", async () => {
     const repo = await createTempGitRepo();
-    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
-    planes.push(plane);
-    const server = createAnySubagentsMcpServer({ plane });
+    const paths = await createTestRuntimePaths();
+    const plane = createTestControlPlane(paths, { globalConcurrency: 1 });
+    const mcpPlane = createTestControlPlane(paths, { globalConcurrency: 1, audience: "public" });
+    planes.push(plane, mcpPlane);
+    const server = createAnySubagentsMcpServer({ plane: mcpPlane });
     const client = new Client({ name: "test-client", version: "1.0.0" });
     const [clientTransport, serverTransport] = createLinkedTransports();
     await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);

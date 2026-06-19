@@ -58,9 +58,8 @@ export const createDaemonApp = ({ plane }: DaemonAppOptions): FastifyInstance =>
   });
 
   app.get("/artifacts/by-uri", async (request) => {
-    const query = request.query as { resource_uri: string; audience?: string };
-    const audience = query.audience === "internal" ? "internal" : "public";
-    return plane.getArtifact({ resource_uri: query.resource_uri }, { audience });
+    const query = request.query as { resource_uri: string };
+    return plane.getArtifact({ resource_uri: query.resource_uri });
   });
 
   app.get("/sessions/:session_id/digest", async (request) => {

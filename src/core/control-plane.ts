@@ -54,6 +54,7 @@ export type { SubmitTaskGroupInput, CreateSessionInput };
 export interface ControlPlaneOptions {
   paths: RuntimePaths;
   config?: AppConfig;
+  audience?: ResultAudience;
 }
 
 export interface TaskSummary {
@@ -77,11 +78,13 @@ export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
   private readonly config: AppConfig;
+  private readonly audience: ResultAudience;
   private adapterHealthCache?: { probedAt: number; health: Promise<Record<KnownAdapter, AdapterHealthSnapshot>> };
 
   constructor(private readonly options: ControlPlaneOptions) {
     const baseConfig = options.config ?? defaultConfig();
     this.config = normalizeConfig(baseConfig);
+    this.audience = options.audience ?? "internal";
     this.store = new Store(options.paths.dbPath);
     const running = new Map<string, RunningAttempt>();
     const metrics = createMetricsRecorder(this.store);
@@ -195,14 +198,12 @@ export class ControlPlane {
   }
 
   async getTaskResult(
-    input: { task_id: string; attempt_id?: string },
-    options: { audience?: ResultAudience } = {}
+    input: { task_id: string; attempt_id?: string }
   ): Promise<{
     task: TaskSummary;
     attempt: StoredAttempt;
     result?: ResultEnvelope;
   }> {
-    const audience = options.audience ?? "internal";
     const task = this.requireTask(input.task_id);
     const attempt = input.attempt_id ? this.store.getAttempt(input.attempt_id) : this.store.getLatestAttemptForTask(task.task_id);
     if (!attempt) {
@@ -210,7 +211,7 @@ export class ControlPlane {
     }
     return {
       task: summarizeTask(task),
-      attempt: forAudience.attempt(attempt, audience),
+      attempt: forAudience.attempt(attempt, this.audience),
       ...(attempt.result ? { result: attempt.result } : {})
     };
   }
@@ -238,18 +239,17 @@ export class ControlPlane {
   // ─── Artifacts ──────────────────────────────────────────────────
 
   async listArtifacts(
-    filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string },
-    options: { audience?: ResultAudience } = {}
+    filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string }
   ): Promise<{
     artifacts: StoredArtifact[];
   }> {
-    const audience = options.audience ?? "public";
-    return { artifacts: this.store.listArtifacts(filter).map((artifact) => forAudience.artifact(artifact, audience)) };
+    return {
+      artifacts: this.store.listArtifacts(filter).map((artifact) => forAudience.artifact(artifact, this.audience))
+    };
   }
 
   async getArtifact(
-    input: { artifact_id?: string; resource_uri?: string },
-    options: { audience?: ResultAudience } = {}
+    input: { artifact_id?: string; resource_uri?: string }
   ): Promise<StoredArtifact> {
     if (!input.artifact_id && !input.resource_uri) {
       throw new Error("Either artifact_id or resource_uri must be provided");
@@ -260,7 +260,7 @@ export class ControlPlane {
     if (!artifact) {
       throw new NotFoundError("Artifact", input.artifact_id ?? input.resource_uri ?? "unknown");
     }
-    return forAudience.artifact(artifact, options.audience ?? "public");
+    return forAudience.artifact(artifact, this.audience);
   }
 
   // ─── Cancellation ──────────────────────────────────────────────
