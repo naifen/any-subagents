@@ -1,7 +1,8 @@
-import { readFile } from "node:fs/promises";
+import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
-import { createControlPlane } from "../src/core/control-plane.js";
+import { createTestControlPlane } from "../src/test-support/control-plane.js";
+import { Store } from "../src/db/store.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 import { createTempGitRepo } from "../src/test-support/git.js";
 
@@ -16,7 +17,7 @@ describe("control plane fake adapter", () => {
   test("runs a fake write task end-to-end and exposes compact evidence", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 2 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 2 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -78,7 +79,7 @@ describe("control plane fake adapter", () => {
   test("marks malformed result files as failed_contract and preserves evidence", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 1 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -120,7 +121,7 @@ describe("control plane fake adapter", () => {
   test("marks tasks as timed_out when the adapter exceeds the task timeout", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 1 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -157,7 +158,7 @@ describe("control plane fake adapter", () => {
   test("cancels running tasks idempotently", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 1 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -194,7 +195,7 @@ describe("control plane fake adapter", () => {
   test("queues 100 fake tasks with bounded concurrency", { timeout: 60_000 }, async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 4 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 4 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -239,7 +240,7 @@ describe("control plane fake adapter", () => {
   test("group with completed + cancelled tasks resolves to mixed status", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime, maxConcurrency: 1 });
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -326,7 +327,7 @@ describe("session brief revision", () => {
   test("rejects stale brief revision on update", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime });
+    const plane = createTestControlPlane(runtime);
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -355,7 +356,7 @@ describe("session brief revision", () => {
   test("rejects stale brief revision on task group submission", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths: runtime });
+    const plane = createTestControlPlane(runtime);
     planes.push(plane);
 
     const session = await plane.createSession({
@@ -384,5 +385,209 @@ describe("session brief revision", () => {
         }]
       })
     ).rejects.toThrow(/revision conflict/i);
+  });
+});
+
+describe("task group events and limits", () => {
+  test("records revision_override when ignore_revision_conflict is true", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
+    planes.push(plane);
+
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Override test." } });
+    await plane.updateSessionBrief({
+      session_id: session.session_id,
+      expected_brief_revision: 0,
+      brief: { goal: "Updated." }
+    });
+
+    await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Override",
+      expected_brief_revision: 0,
+      ignore_revision_conflict: true,
+      tasks: [{
+        mode: "research",
+        goal: "Run despite stale revision.",
+        adapter: "fake",
+        profile: "default",
+        success_criteria: ["Done."]
+      }]
+    });
+
+    const events = plane.listEvents({ session_id: session.session_id, type: "session.revision_override" });
+    expect(events.events).toHaveLength(1);
+  });
+
+  test("records duplicate_warning for identical tasks in one submission", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Dup test." } });
+    const duplicateTask = {
+      mode: "research" as const,
+      goal: "Same task.",
+      adapter: "fake",
+      profile: "default",
+      success_criteria: ["Done."]
+    };
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Dupes",
+      expected_brief_revision: session.brief_revision,
+      tasks: [duplicateTask, duplicateTask]
+    });
+    expect(group.group_id).toMatch(/^grp_/);
+    const events = plane.listEvents({ group_id: group.group_id, type: "task_group.duplicate_warning" });
+    expect(events.events).toHaveLength(1);
+  });
+
+  test("runs higher-priority tasks before lower-priority tasks", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Priority test." } });
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Priority",
+      expected_brief_revision: session.brief_revision,
+      tasks: [
+        {
+          mode: "verify",
+          goal: "Low priority slow task.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          priority: 1,
+          metadata: { fake_delay_ms: 200 }
+        },
+        {
+          mode: "research",
+          goal: "High priority fast task.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          priority: 10
+        }
+      ]
+    });
+    await plane.waitForTaskGroup(group.group_id, 10_000);
+    const tasks = await plane.queryTasks({ group_id: group.group_id });
+    const high = tasks.tasks.find((task) => task.goal.includes("High priority"));
+    const low = tasks.tasks.find((task) => task.goal.includes("Low priority"));
+    expect(high?.status).toBe("completed");
+    expect(low?.status).toBe("completed");
+
+    const metrics = await plane.getMetrics({ session_id: session.session_id, name: "queue_wait_ms" });
+    const highWait = metrics.metrics.find((metric) => metric.task_id === high?.task_id)?.value;
+    const lowWait = metrics.metrics.find((metric) => metric.task_id === low?.task_id)?.value;
+    expect(highWait).toBeDefined();
+    expect(lowWait).toBeDefined();
+    expect(highWait!).toBeLessThan(lowWait!);
+  });
+
+  test("inherits session priority when task priority is omitted", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
+    planes.push(plane);
+    const session = await plane.createSession({
+      repo,
+      base_ref: "HEAD",
+      brief: { goal: "Session priority." },
+      priority: 42
+    });
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Inherited priority",
+      expected_brief_revision: session.brief_revision,
+      tasks: [
+        {
+          mode: "research",
+          goal: "Inherits session priority.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."]
+        }
+      ]
+    });
+    await plane.waitForTaskGroup(group.group_id, 10_000);
+    const taskId = (await plane.queryTasks({ group_id: group.group_id })).tasks[0]!.task_id;
+    const store = new Store(runtime.dbPath);
+    expect(store.getSession(session.session_id)?.priority).toBe(42);
+    expect(store.getTask(taskId)?.envelope.priority).toBe(42);
+    store.close();
+  });
+
+  test("applies model allowlist fallback to task envelope and attempt fields", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, {
+      globalConcurrency: 1,
+      config: {
+        schema_version: "1",
+        capacity_preemption_policy: "stop_starting",
+        skill_paths: [],
+        skill_mount: "symlink",
+        skill_path_allowlist: [],
+        redactions: [],
+        path_redaction: false,
+        profiles: {
+          fake: {
+            default: {
+              allowed_models: ["allowed-model"],
+              default_model: "allowed-model"
+            }
+          }
+        }
+      }
+    });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Model fallback." } });
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Fallback",
+      expected_brief_revision: session.brief_revision,
+      tasks: [{
+        mode: "research",
+        goal: "Check model fallback.",
+        adapter: "fake",
+        profile: "default",
+        success_criteria: ["Done."],
+        model: "blocked-model"
+      }]
+    });
+    await plane.waitForTaskGroup(group.group_id, 10_000);
+    const result = await plane.getTaskResult({ task_id: (await plane.queryTasks({ group_id: group.group_id })).tasks[0]!.task_id });
+    expect(result.attempt.requested_model).toBe("blocked-model");
+    expect(result.attempt.effective_model).toBe("allowed-model");
+    const events = plane.listEvents({ session_id: session.session_id, type: "task.model_fallback" });
+    expect(events.events).toHaveLength(1);
+  });
+
+  test("rejects dirty repo when submitting a task group", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1 });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Dirty submit." } });
+    await writeFile(path.join(repo, "dirty.txt"), "x\n");
+    await expect(
+      plane.submitTaskGroup({
+        session_id: session.session_id,
+        title: "Dirty",
+        expected_brief_revision: session.brief_revision,
+        tasks: [{
+          mode: "research",
+          goal: "Should fail.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."]
+        }]
+      })
+    ).rejects.toThrow(/dirty/i);
   });
 });

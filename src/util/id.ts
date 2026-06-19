@@ -8,3 +8,4 @@ export const newTaskId = (): string => id("task");
 export const newAttemptId = (): string => id("att");
 export const newArtifactId = (): string => id("art");
 export const newEventId = (): string => id("evt");
+export const newMetricId = (): string => id("met");

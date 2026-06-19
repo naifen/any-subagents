@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, test, vi } from "vitest";
 import type { CodexHealth } from "../src/adapters/codex.js";
-import { createControlPlane } from "../src/core/control-plane.js";
+import { createTestControlPlane } from "../src/test-support/control-plane.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 
 const mockCheckCodexAdapterHealth = vi.fn<
@@ -46,7 +46,7 @@ describe("doctor and effective config", () => {
   test("reports storage, adapters, security defaults, and healthy local checks", async () => {
     mockCheckCodexAdapterHealth.mockResolvedValue(availableHealth);
     const paths = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths, maxConcurrency: 3 });
+    const plane = createTestControlPlane(paths, { globalConcurrency: 3 });
     try {
       const config = await plane.getEffectiveConfig();
       expect(config.storage).toMatchObject({
@@ -78,7 +78,7 @@ describe("doctor and effective config", () => {
   test("reports codex adapter as unavailable when health probe fails", async () => {
     mockCheckCodexAdapterHealth.mockResolvedValue(unavailableHealth);
     const paths = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths, maxConcurrency: 3 });
+    const plane = createTestControlPlane(paths, { globalConcurrency: 3 });
     try {
       const config = await plane.getEffectiveConfig();
       expect(config.adapters["codex"]).toMatchObject({
@@ -100,7 +100,7 @@ describe("doctor and effective config", () => {
   test("uses a shared codex health probe across config and doctor", async () => {
     mockCheckCodexAdapterHealth.mockResolvedValue(availableHealth);
     const paths = await createTestRuntimePaths();
-    const plane = createControlPlane({ paths, maxConcurrency: 3 });
+    const plane = createTestControlPlane(paths, { globalConcurrency: 3 });
     try {
       await plane.getEffectiveConfig();
       await plane.doctor();

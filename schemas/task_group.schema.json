@@ -109,7 +109,22 @@
             "type": "string",
             "minLength": 1
           },
+          "requested_model": {
+            "type": "string",
+            "minLength": 1
+          },
           "reasoning_level": {
+            "type": "string",
+            "enum": [
+              "minimal",
+              "low",
+              "medium",
+              "high",
+              "xhigh",
+              "max"
+            ]
+          },
+          "requested_reasoning_level": {
             "type": "string",
             "enum": [
               "minimal",
@@ -246,7 +261,7 @@
       },
       "additionalProperties": {}
     },
-    "budget_exhaustion_policy": {
+    "capacity_preemption_policy": {
       "type": "string",
       "enum": [
         "stop_starting",

@@ -172,7 +172,11 @@ describe("Store", () => {
     const found = s.getArtifactByResourceUri("any-subagents://test/art_2");
     expect(found?.artifact_id).toBe("art_2");
 
+    const byId = s.getArtifactById("art_2");
+    expect(byId?.artifact_id).toBe("art_2");
+
     const notFound = s.getArtifactByResourceUri("any-subagents://test/nope");
     expect(notFound).toBeUndefined();
+    expect(s.getArtifactById("art_missing")).toBeUndefined();
   });
 });

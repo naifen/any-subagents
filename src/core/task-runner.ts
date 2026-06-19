@@ -1,22 +1,22 @@
-import { createHash } from "node:crypto";
 import { createWriteStream, existsSync } from "node:fs";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import type { RuntimePaths } from "../storage/paths.js";
 import {
   resultEnvelopeSchema,
-  schemaVersion,
   type ResultEnvelope,
   type Session,
   type TaskEnvelope
 } from "../schemas/index.js";
-import { newArtifactId, newAttemptId } from "./id.js";
-import { nowIso } from "./time.js";
-import { Store, type StoredArtifact, type StoredAttempt, type StoredTask } from "../db/store.js";
-import { createPatch, excludeHarness } from "./git.js";
-import { execRequired, execShell } from "./exec.js";
+import { newAttemptId } from "../util/id.js";
+import { nowIso } from "../util/time.js";
+import { Store, type StoredAttempt, type StoredTask } from "../db/store.js";
+import { createTaskWorktree } from "./worktree.js";
+import { registerAttemptEvidence } from "./attempt-evidence.js";
+import { resolveTaskProfilePolicy } from "./task-policy.js";
+import { execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
-import { writeHarnessFiles } from "./harness.js";
+import { writeHarnessFiles, type HarnessInput } from "./harness.js";
 import {
   appendCodexJsonlLines,
   CODEX_COMMAND,
@@ -28,15 +28,16 @@ import {
   synthesizeResult
 } from "../adapters/codex.js";
 import type { SessionBrief } from "../schemas/index.js";
-import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
+import { failureStatuses, type TaskRuntimeStatus } from "../domain/status.js";
+import { isKnownAdapter } from "../adapters/registry.js";
 import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
+import type { AppConfig } from "../config/schema.js";
+import { defaultConfig } from "../config/schema.js";
+import { mountSkillPaths } from "./skills.js";
+import type { MetricsRecorder } from "./metrics-recorder.js";
+import { createMetricsRecorder } from "./metrics-recorder.js";
 
 export type { RunningAttempt };
-
-const knownAdapters = ["fake", "codex"] as const;
-type KnownAdapter = (typeof knownAdapters)[number];
-const isKnownAdapter = (adapter: string): adapter is KnownAdapter =>
-  (knownAdapters as readonly string[]).includes(adapter);
 
 export interface RunTaskResult {
   attemptId: string;
@@ -52,7 +53,9 @@ export class TaskRunner {
   constructor(
     private readonly store: Store,
     private readonly paths: RuntimePaths,
-    private readonly running: Map<string, RunningAttempt>
+    private readonly running: Map<string, RunningAttempt>,
+    private readonly config: AppConfig = defaultConfig(),
+    private readonly metrics: MetricsRecorder = createMetricsRecorder(store)
   ) {}
 
   /**
@@ -65,6 +68,11 @@ export class TaskRunner {
     const attemptId = newAttemptId();
     const attemptNumber = task.attempt_count + 1;
     const timestamp = nowIso();
+    const policy = resolveTaskProfilePolicy(this.config, task);
+    const requestedModel = task.envelope.requested_model ?? task.envelope.model;
+    const requestedReasoning = task.envelope.requested_reasoning_level ?? task.envelope.reasoning_level;
+    const effectiveModel = task.envelope.model ?? policy.effectiveModel;
+    const effectiveReasoning = task.envelope.reasoning_level ?? policy.effectiveReasoning;
     const attempt: StoredAttempt = {
       attempt_id: attemptId,
       task_id: task.task_id,
@@ -72,18 +80,43 @@ export class TaskRunner {
       status: "running",
       created_at: timestamp,
       updated_at: timestamp,
-      started_at: timestamp
+      started_at: timestamp,
+      ...(requestedModel ? { requested_model: requestedModel } : {}),
+      ...(effectiveModel ? { effective_model: effectiveModel } : {}),
+      ...(requestedReasoning ? { requested_reasoning_level: requestedReasoning } : {}),
+      ...(effectiveReasoning ? { effective_reasoning_level: effectiveReasoning } : {}),
+      ...(task.envelope.permissions ? { requested_permissions: task.envelope.permissions } : {}),
+      ...(task.envelope.sandbox ? { requested_sandbox: task.envelope.sandbox } : {}),
+      ...(policy.effectivePermissions ? { effective_permissions: policy.effectivePermissions } : {}),
+      ...(policy.effectiveSandbox ? { effective_sandbox: policy.effectiveSandbox } : {}),
+      ...(policy.networkPolicy ? { network_policy: policy.networkPolicy } : {}),
+      ...(policy.packageInstallPolicy ? { package_install_policy: policy.packageInstallPolicy } : {})
     };
     this.store.insertAttempt(attempt);
     this.store.updateTaskStatus(task.task_id, "running", attemptId);
     this.store.updateGroupStatus(task.group_id, "running");
 
-    const worktreePath = await this.createWorktree(session, task);
+    const worktreePath = await createTaskWorktree({ session, task, paths: this.paths, metrics: this.metrics });
     const harnessDir = path.join(worktreePath, ".any-subagents");
     const logPath = path.join(this.paths.logsDir, session.session_id, task.task_id, `${attemptId}.log`);
     const resultPath = path.join(harnessDir, "result.json");
     await Promise.all([mkdir(harnessDir, { recursive: true }), mkdir(path.dirname(logPath), { recursive: true })]);
-    await writeHarnessFiles({ harnessDir, envelope: task.envelope, brief: session.brief, attemptId });
+    const mountedSkills = await mountSkillPaths({
+      skillPaths: this.config.skill_paths,
+      allowlist: this.config.skill_path_allowlist,
+      mountMode: this.config.skill_mount,
+      worktreePath
+    });
+    await writeHarnessFiles({
+      harnessDir,
+      envelope: task.envelope,
+      brief: session.brief,
+      attemptId,
+      verificationCommands: task.envelope.verification_commands,
+      mountedSkills,
+      config: this.config,
+      paths: this.paths
+    });
 
     let currentAttempt: StoredAttempt = {
       ...attempt,
@@ -104,7 +137,16 @@ export class TaskRunner {
         error: "Task cancelled"
       });
       currentAttempt = { ...currentAttempt, status: "cancelled" };
-      await this.registerEvidence({ session, task, attempt: currentAttempt, worktreePath, logPath });
+      await registerAttemptEvidence({
+        store: this.store,
+        config: this.config,
+        paths: this.paths,
+        session,
+        task,
+        attempt: currentAttempt,
+        worktreePath,
+        logPath
+      });
       return { attemptId, status: "cancelled" };
     }
 
@@ -147,7 +189,16 @@ export class TaskRunner {
       finished_at: nowIso()
     };
     this.store.updateAttempt(currentAttempt);
-    await this.registerEvidence({ session, task, attempt: currentAttempt, worktreePath, logPath });
+    await registerAttemptEvidence({
+      store: this.store,
+      config: this.config,
+      paths: this.paths,
+      session,
+      task,
+      attempt: currentAttempt,
+      worktreePath,
+      logPath
+    });
     this.store.appendEvent({
       type: `task.${status}`,
       session_id: task.session_id,
@@ -157,22 +208,31 @@ export class TaskRunner {
       severity: failureStatuses.has(status) ? "warning" : "info",
       message: `Task finished with status ${status}`
     });
+    if (failureStatuses.has(status)) {
+      this.metrics.record("adapter_failure_total", 1, {
+        session_id: task.session_id,
+        group_id: task.group_id,
+        task_id: task.task_id,
+        attempt_id: attemptId,
+        adapter: task.adapter,
+        status
+      });
+    }
+    this.metrics.record("verification_outcome", status === "completed_with_failed_verification" ? 0 : 1, {
+      session_id: task.session_id,
+      group_id: task.group_id,
+      task_id: task.task_id,
+      attempt_id: attemptId,
+      status
+    });
     finalizeAttempt(this.store, {
+      attemptId,
       taskId: task.task_id,
       groupId: task.group_id,
       status,
       ...(error ? { error } : {})
     });
     return { attemptId, status };
-  }
-
-  private async createWorktree(session: Session, task: StoredTask): Promise<string> {
-    await mkdir(this.paths.worktreeRoot, { recursive: true });
-    const project = path.basename(session.repo).replace(/[^A-Za-z0-9._-]/g, "-") || "repo";
-    const worktreePath = path.join(this.paths.worktreeRoot, `${project}-${task.task_id}`);
-    await retry(() => execRequired("git", ["worktree", "add", "--detach", worktreePath, task.envelope.base_ref ?? session.base_ref], session.repo));
-    await excludeHarness(worktreePath);
-    return worktreePath;
   }
 
   private async runAdapter(input: {
@@ -189,13 +249,14 @@ export class TaskRunner {
     if (!isKnownAdapter(input.task.adapter)) {
       throw new Error(`Unsupported adapter: ${input.task.adapter}`);
     }
-    switch (input.task.adapter) {
+    const adapter = input.task.adapter;
+    switch (adapter) {
       case "codex":
         return this.runCodexAdapter(input);
       case "fake":
         return this.runFakeAdapter(input);
       default: {
-        const unhandled: never = input.task.adapter;
+        const unhandled: never = adapter;
         throw new Error(`Unsupported adapter: ${String(unhandled)}`);
       }
     }
@@ -312,100 +373,4 @@ export class TaskRunner {
     await new Promise<void>((resolve) => logStream.end(resolve));
     return passed;
   }
-
-  private async registerEvidence(input: {
-    session: Session;
-    task: StoredTask;
-    attempt: StoredAttempt;
-    worktreePath: string;
-    logPath: string;
-  }): Promise<void> {
-    const logPreview = await previewFile(input.logPath);
-    const logArtifact = await this.createArtifact({
-      session: input.session,
-      task: input.task,
-      attempt: input.attempt,
-      type: "log",
-      mime_type: "text/plain",
-      summary: "Captured stdout/stderr for the task attempt.",
-      localPath: input.logPath,
-      preview: logPreview
-    });
-    this.store.insertArtifact(logArtifact);
-
-    if (input.task.mode !== "write") {
-      return;
-    }
-
-    const patch = await createPatch(input.worktreePath);
-    if (patch.trim().length > 0) {
-      const patchPath = path.join(this.paths.artifactsDir, input.session.session_id, input.task.task_id, `${input.attempt.attempt_id}.patch`);
-      await mkdir(path.dirname(patchPath), { recursive: true });
-      await writeFile(patchPath, patch);
-      const patchArtifact = await this.createArtifact({
-        session: input.session,
-        task: input.task,
-        attempt: input.attempt,
-        type: "diff",
-        mime_type: "text/x-diff",
-        summary: "Patch produced by the task attempt.",
-        localPath: patchPath,
-        preview: patch.slice(0, 4_096)
-      });
-      this.store.insertArtifact(patchArtifact);
-    }
-  }
-
-  private async createArtifact(input: {
-    session: Session;
-    task: StoredTask;
-    attempt: StoredAttempt;
-    type: StoredArtifact["type"];
-    mime_type: string;
-    summary: string;
-    localPath: string;
-    preview?: string;
-  }): Promise<StoredArtifact> {
-    const artifactId = newArtifactId();
-    const size = await stat(input.localPath);
-    const hash = createHash("sha256").update(await readFile(input.localPath)).digest("hex");
-    return {
-      schema_version: schemaVersion,
-      artifact_id: artifactId,
-      scope: {
-        session_id: input.session.session_id,
-        group_id: input.task.group_id,
-        task_id: input.task.task_id,
-        attempt_id: input.attempt.attempt_id
-      },
-      type: input.type,
-      mime_type: input.mime_type,
-      summary: input.summary,
-      created_at: nowIso(),
-      resource_uri: `any-subagents://sessions/${input.session.session_id}/tasks/${input.task.task_id}/artifacts/${artifactId}`,
-      size_bytes: size.size,
-      hash,
-      preview: input.preview,
-      path: input.localPath
-    };
-  }
 }
-
-const previewFile = async (filePath: string): Promise<string> => {
-  const content = await readFile(filePath, "utf8");
-  return content.slice(0, 4_096);
-};
-
-const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms));
-
-const retry = async <T>(fn: () => Promise<T>, maxAttempts = 3, baseDelayMs = 100): Promise<T> => {
-  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
-    try {
-      return await fn();
-    } catch (error) {
-      if (attempt === maxAttempts) throw error;
-      await sleep(baseDelayMs * 2 ** (attempt - 1));
-    }
-  }
-  throw new Error("unreachable");
-};

@@ -1,8 +1,17 @@
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import * as z from "zod/v4";
 import type { ControlPlane } from "../core/control-plane.js";
-import { definedEntries } from "../core/defined.js";
-import { publicSchemas } from "../schemas/index.js";
+import { forAudience } from "../core/audience.js";
+import { publicSchemas, sessionBriefSchema, type SessionBrief } from "../schemas/index.js";
+import {
+  mcpCancelTasksSchema,
+  mcpCreateSessionSchema,
+  mcpGetMetricsSchema,
+  mcpSubmitTaskGroupSchema,
+  mcpUpdateSessionBriefSchema,
+  toCreateSessionInput,
+  toSubmitTaskGroupInput
+} from "../schemas/mcp-tools.js";
 
 export interface AnySubagentsMcpServerOptions {
   plane: ControlPlane;
@@ -13,11 +22,6 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     name: "any-subagents",
     version: "0.1.0"
   });
-
-  // ─── Tools ─────────────────────────────────────────────────────
-  // MCP SDK v1.29.0 natively supports Zod v4 schemas via AnySchema.
-  // Each tool uses registerTool with typed inputSchema and returns
-  // CallToolResult format.
 
   server.registerTool(
     "list_adapters",
@@ -30,17 +34,9 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     {
       title: "create_session",
       description: "Create a session for a repository and base ref.",
-      inputSchema: z
-        .object({
-          repo: z.string(),
-          base_ref: z.string(),
-          brief: z.record(z.string(), z.unknown()).optional(),
-          metadata: z.record(z.string(), z.unknown()).optional()
-        })
-        .strict()
+      inputSchema: mcpCreateSessionSchema
     },
-    async ({ repo, base_ref, brief, metadata }) =>
-      jsonResult(await plane.createSession(definedEntries({ repo, base_ref, brief, metadata }) as { repo: string; base_ref: string; brief?: Record<string, unknown>; metadata?: Record<string, unknown> }))
+    async (input) => jsonResult(await plane.createSession(toCreateSessionInput(input)))
   );
 
   server.registerTool(
@@ -48,18 +44,9 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     {
       title: "submit_task_group",
       description: "Submit a task group for durable scheduling.",
-      inputSchema: z
-        .object({
-          session_id: z.string(),
-          title: z.string(),
-          expected_brief_revision: z.number().int().nonnegative(),
-          ignore_revision_conflict: z.boolean().optional(),
-          tasks: z.array(z.record(z.string(), z.unknown()))
-        })
-        .strict()
+      inputSchema: mcpSubmitTaskGroupSchema
     },
-    async (input) =>
-      jsonResult(await plane.submitTaskGroup(input as Parameters<ControlPlane["submitTaskGroup"]>[0]))
+    async (input) => jsonResult(await plane.submitTaskGroup(toSubmitTaskGroupInput(input)))
   );
 
   server.registerTool(
@@ -84,8 +71,11 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       description: "Read a task result envelope and attempt status.",
       inputSchema: z.object({ task_id: z.string(), attempt_id: z.string().optional() }).strict()
     },
-    async ({ task_id, attempt_id }) =>
-      jsonResult(await plane.getTaskResult(definedEntries({ task_id, attempt_id }) as { task_id: string; attempt_id?: string }))
+    async ({ task_id, attempt_id }) => {
+      const input: { task_id: string; attempt_id?: string } = { task_id };
+      if (attempt_id !== undefined) input.attempt_id = attempt_id;
+      return jsonResult(await plane.getTaskResult(input, { audience: "public" }));
+    }
   );
 
   server.registerTool(
@@ -95,8 +85,12 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       description: "Read a preview of task attempt logs.",
       inputSchema: z.object({ task_id: z.string(), attempt_id: z.string().optional(), max_bytes: z.number().int().positive().optional() }).strict()
     },
-    async ({ task_id, attempt_id, max_bytes }) =>
-      jsonResult(await plane.getTaskLogs(definedEntries({ task_id, attempt_id, max_bytes }) as { task_id: string; attempt_id?: string; max_bytes?: number }))
+    async ({ task_id, attempt_id, max_bytes }) => {
+      const input: { task_id: string; attempt_id?: string; max_bytes?: number } = { task_id };
+      if (attempt_id !== undefined) input.attempt_id = attempt_id;
+      if (max_bytes !== undefined) input.max_bytes = max_bytes;
+      return jsonResult(await plane.getTaskLogs(input));
+    }
   );
 
   server.registerTool(
@@ -119,7 +113,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       if (group_id !== undefined) filter.group_id = group_id;
       if (task_id !== undefined) filter.task_id = task_id;
       if (attempt_id !== undefined) filter.attempt_id = attempt_id;
-      return jsonResult(await plane.listArtifacts(filter));
+      return jsonResult(await plane.listArtifacts(filter, { audience: "public" }));
     }
   );
 
@@ -131,10 +125,10 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
       inputSchema: z.object({ artifact_id: z.string().optional(), resource_uri: z.string().optional() }).strict()
     },
     async ({ artifact_id, resource_uri }) => {
-      const filter: { artifact_id?: string; resource_uri?: string } = {};
-      if (artifact_id !== undefined) filter.artifact_id = artifact_id;
-      if (resource_uri !== undefined) filter.resource_uri = resource_uri;
-      return jsonResult(await plane.getArtifact(filter));
+      const input: { artifact_id?: string; resource_uri?: string } = {};
+      if (artifact_id !== undefined) input.artifact_id = artifact_id;
+      if (resource_uri !== undefined) input.resource_uri = resource_uri;
+      return jsonResult(await plane.getArtifact(input, { audience: "public" }));
     }
   );
 
@@ -143,15 +137,16 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     {
       title: "update_session_brief",
       description: "Update the orchestrator-maintained session brief with optimistic concurrency.",
-      inputSchema: z
-        .object({
-          session_id: z.string(),
-          expected_brief_revision: z.number().int().nonnegative(),
-          brief: z.record(z.string(), z.unknown())
-        })
-        .strict()
+      inputSchema: mcpUpdateSessionBriefSchema
     },
-    async (input) => jsonResult(await plane.updateSessionBrief(input))
+    async (input) =>
+      jsonResult(
+        await plane.updateSessionBrief({
+          session_id: input.session_id,
+          expected_brief_revision: input.expected_brief_revision,
+          brief: sessionBriefSchema.partial().parse(input.brief) as Partial<SessionBrief>
+        })
+      )
   );
 
   server.registerTool(
@@ -169,10 +164,15 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     {
       title: "cancel_tasks",
       description: "Cancel tasks, task groups, or sessions idempotently.",
-      inputSchema: z.object({ task_ids: z.array(z.string()).optional(), group_id: z.string().optional(), session_id: z.string().optional() }).strict()
+      inputSchema: mcpCancelTasksSchema
     },
-    async ({ task_ids, group_id, session_id }) =>
-      jsonResult(await plane.cancelTasks(definedEntries({ task_ids, group_id, session_id }) as Parameters<ControlPlane["cancelTasks"]>[0]))
+    async ({ task_ids, group_id, session_id }) => {
+      const input: { task_ids?: string[]; group_id?: string; session_id?: string } = {};
+      if (task_ids !== undefined) input.task_ids = task_ids;
+      if (group_id !== undefined) input.group_id = group_id;
+      if (session_id !== undefined) input.session_id = session_id;
+      return jsonResult(await plane.cancelTasks(input));
+    }
   );
 
   server.registerTool(
@@ -184,11 +184,7 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     },
     async (input) => {
       const merge = await plane.mergeTasks(input);
-      const { integration_worktree_path: _path, ...publicMerge } = merge;
-      return jsonResult({
-        ...publicMerge,
-        integration_worktree_uri: `any-subagents://sessions/${merge.session_id}/integration-worktrees/latest`
-      });
+      return jsonResult(forAudience.mergeResult(merge, "public"));
     }
   );
 
@@ -204,7 +200,86 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
     async () => jsonResult(await plane.doctor())
   );
 
-  // ─── Resources ─────────────────────────────────────────────────
+  server.registerTool(
+    "get_metrics",
+    {
+      title: "get_metrics",
+      description: "Read local-only metrics stored in SQLite.",
+      inputSchema: mcpGetMetricsSchema
+    },
+    async ({ name, session_id, task_id, limit }) => {
+      const input: { name?: string; session_id?: string; task_id?: string; limit?: number } = {};
+      if (name !== undefined) input.name = name;
+      if (session_id !== undefined) input.session_id = session_id;
+      if (task_id !== undefined) input.task_id = task_id;
+      if (limit !== undefined) input.limit = limit;
+      return jsonResult(await plane.getMetrics(input));
+    }
+  );
+
+  server.registerTool(
+    "export_session",
+    {
+      title: "export_session",
+      description: "Export a session bundle to a local directory.",
+      inputSchema: z.object({ session_id: z.string(), output_dir: z.string() }).strict()
+    },
+    async (input) => jsonResult(await plane.exportSession(input))
+  );
+
+  server.registerResource(
+    "session_digest",
+    "any-subagents://sessions/{session_id}/digest",
+    {
+      title: "Session digest",
+      description: "Compact session digest view.",
+      mimeType: "application/json"
+    },
+    async (uri) => {
+      const sessionId = uri.pathname.split("/")[2];
+      if (!sessionId) throw new Error("session_id required");
+      const digest = await plane.getSessionDigest({ session_id: sessionId });
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(digest, null, 2) }]
+      };
+    }
+  );
+
+  server.registerResource(
+    "task_result",
+    "any-subagents://tasks/{task_id}/result",
+    {
+      title: "Task result",
+      description: "Public task result without local paths.",
+      mimeType: "application/json"
+    },
+    async (uri) => {
+      const taskId = uri.pathname.split("/")[2];
+      if (!taskId) throw new Error("task_id required");
+      const result = await plane.getTaskResult({ task_id: taskId }, { audience: "public" });
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(result, null, 2) }]
+      };
+    }
+  );
+
+  server.registerResource(
+    "artifact_by_uri",
+    "any-subagents://artifacts/{artifact_id}",
+    {
+      title: "Artifact",
+      description: "Artifact metadata without local path.",
+      mimeType: "application/json"
+    },
+    async (uri) => {
+      const artifactId = uri.pathname.split("/")[2];
+      if (!artifactId) throw new Error("artifact_id required");
+      const artifact = await plane.getArtifact({ artifact_id: artifactId }, { audience: "public" });
+      return {
+        contents: [{ uri: uri.href, mimeType: "application/json", text: JSON.stringify(artifact, null, 2) }]
+      };
+    }
+  );
 
   for (const [name, schema] of Object.entries(publicSchemas)) {
     const uri = `any-subagents://schemas/${name}`;
@@ -231,9 +306,6 @@ export const createAnySubagentsMcpServer = ({ plane }: AnySubagentsMcpServerOpti
   return server;
 };
 
-/**
- * Wrap a result object into the MCP CallToolResult format.
- */
 const jsonResult = (data: unknown): {
   content: Array<{ type: "text"; text: string }>;
   structuredContent: Record<string, unknown>;

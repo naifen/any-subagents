@@ -1,4 +1,19 @@
 import * as z from "zod";
+import {
+  reasoningLevelSchema,
+  sessionBriefSchema,
+  taskModeSchema,
+  taskScopeSchema,
+  verificationCommandSchema
+} from "./primitives.js";
+
+export {
+  reasoningLevelSchema,
+  sessionBriefSchema,
+  taskModeSchema,
+  taskScopeSchema,
+  verificationCommandSchema
+} from "./primitives.js";
 
 export const schemaVersion = "1";
 
@@ -15,20 +30,6 @@ export const taskIdSchema = prefixedId("task");
 export const attemptIdSchema = prefixedId("att");
 export const artifactIdSchema = prefixedId("art");
 export const eventIdSchema = prefixedId("evt");
-
-export const taskModeSchema = z.enum(["research", "plan", "diagnose", "write", "review", "verify"]);
-export const reasoningLevelSchema = z.enum(["minimal", "low", "medium", "high", "xhigh", "max"]);
-
-export const sessionBriefSchema = z
-  .object({
-    goal: z.string().default(""),
-    constraints: z.array(z.string()).default([]),
-    decisions: z.array(z.string()).default([]),
-    accepted_findings: z.array(z.string()).default([]),
-    rejected_paths: z.array(z.string()).default([]),
-    open_questions: z.array(z.string()).default([])
-  })
-  .strict();
 
 export const sessionSchema = z
   .object({
@@ -47,20 +48,6 @@ export const sessionSchema = z
   })
   .strict();
 
-export const taskScopeSchema = z
-  .object({
-    paths: z.array(z.string().min(1)).min(1),
-    notes: z.string().optional()
-  })
-  .strict();
-
-export const verificationCommandSchema = z
-  .object({
-    command: z.string().min(1),
-    timeout_ms: z.number().int().positive().optional()
-  })
-  .strict();
-
 export const taskEnvelopeSchema = z
   .object({
     schema_version: z.literal(schemaVersion),
@@ -75,7 +62,9 @@ export const taskEnvelopeSchema = z
     scope: taskScopeSchema.optional(),
     base_ref: z.string().min(1).optional(),
     model: z.string().min(1).optional(),
+    requested_model: z.string().min(1).optional(),
     reasoning_level: reasoningLevelSchema.optional(),
+    requested_reasoning_level: reasoningLevelSchema.optional(),
     reasoning_options: metadataSchema.optional(),
     allow_fallback: z.boolean().optional(),
     permissions: metadataSchema.optional(),
@@ -112,7 +101,7 @@ export const taskGroupSchema = z
     updated_at: isoTimestampSchema,
     phase: z.string().optional(),
     budgets: metadataSchema.optional(),
-    budget_exhaustion_policy: z.enum(["stop_starting", "cancel_running"]).optional(),
+    capacity_preemption_policy: z.enum(["stop_starting", "cancel_running"]).optional(),
     priority: z.number().int().optional(),
     metadata: metadataSchema.optional()
   })
@@ -286,3 +275,4 @@ export type ResultEnvelope = z.infer<typeof resultEnvelopeSchema>;
 export type Artifact = z.infer<typeof artifactSchema>;
 export type Event = z.infer<typeof eventSchema>;
 export type EffectiveConfig = z.infer<typeof effectiveConfigSchema>;
+export type { CreateSessionInput, SubmitTaskGroupInput } from "./contracts.js";

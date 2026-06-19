@@ -1,6 +1,6 @@
 import { Command } from "commander";
 import type { ControlPlane } from "../core/control-plane.js";
-import { definedEntries } from "../core/defined.js";
+import { definedEntries } from "../util/defined.js";
 import { smokeCodexAdapter } from "../adapters/codex.js";
 import { CODEX_COMMAND } from "../adapters/codex-events.js";
 
@@ -46,6 +46,40 @@ export const createCli = ({ plane, stdout = (text) => process.stdout.write(text)
         brief: { goal: options.goal }
       });
       writePayload(created, options.json === true, stdout);
+    });
+
+  session
+    .command("update-brief")
+    .requiredOption("--session-id <id>", "session ID")
+    .requiredOption("--expected-revision <number>", "expected brief revision", parseInt)
+    .requiredOption("--json-input <json>", "brief update JSON")
+    .option("--json", "write JSON")
+    .action(async (options: { sessionId: string; expectedRevision: number; jsonInput: string; json?: boolean }) => {
+      const updated = await plane.updateSessionBrief({
+        session_id: options.sessionId,
+        expected_brief_revision: options.expectedRevision,
+        brief: JSON.parse(options.jsonInput) as Record<string, unknown>
+      });
+      writePayload(updated, options.json === true, stdout);
+    });
+
+  session
+    .command("digest")
+    .requiredOption("--session-id <id>", "session ID")
+    .option("--json", "write JSON")
+    .action(async (options: { sessionId: string; json?: boolean }) => {
+      const digest = await plane.getSessionDigest({ session_id: options.sessionId });
+      writePayload(digest, options.json === true, stdout);
+    });
+
+  session
+    .command("export")
+    .requiredOption("--session-id <id>", "session ID")
+    .requiredOption("--output-dir <path>", "output directory")
+    .option("--json", "write JSON")
+    .action(async (options: { sessionId: string; outputDir: string; json?: boolean }) => {
+      const exported = await plane.exportSession({ session_id: options.sessionId, output_dir: options.outputDir });
+      writePayload(exported, options.json === true, stdout);
     });
 
   const taskGroup = program.command("task-group").description("Task group commands");
@@ -111,6 +145,51 @@ export const createCli = ({ plane, stdout = (text) => process.stdout.write(text)
         attempt_id: options.attemptId
       }));
       writePayload(listed, options.json === true, stdout);
+    });
+
+  artifacts
+    .command("get")
+    .option("--artifact-id <id>", "artifact ID")
+    .option("--resource-uri <uri>", "artifact resource URI")
+    .option("--include-path", "include local path")
+    .option("--json", "write JSON")
+    .action(async (options: { artifactId?: string; resourceUri?: string; includePath?: boolean; json?: boolean }) => {
+      const artifact = await plane.getArtifact(
+        definedEntries({
+          artifact_id: options.artifactId,
+          resource_uri: options.resourceUri
+        }) as Parameters<ControlPlane["getArtifact"]>[0],
+        { audience: options.includePath === true ? "internal" : "public" }
+      );
+      writePayload(artifact, options.json === true, stdout);
+    });
+
+  program
+    .command("merge")
+    .requiredOption("--session-id <id>", "session ID")
+    .requiredOption("--attempt-id <id...>", "attempt IDs")
+    .option("--json", "write JSON")
+    .action(async (options: { sessionId: string; attemptId: string[]; json?: boolean }) => {
+      const merged = await plane.mergeTasks({ session_id: options.sessionId, attempt_ids: options.attemptId });
+      writePayload(merged, options.json === true, stdout);
+    });
+
+  program
+    .command("metrics")
+    .description("Read local-only metrics")
+    .option("--name <name>", "metric name")
+    .option("--session-id <id>", "session ID")
+    .option("--task-id <id>", "task ID")
+    .option("--limit <number>", "max rows", parseInt)
+    .option("--json", "write JSON")
+    .action(async (options: { name?: string; sessionId?: string; taskId?: string; limit?: number; json?: boolean }) => {
+      const metrics = await plane.getMetrics(definedEntries({
+        name: options.name,
+        session_id: options.sessionId,
+        task_id: options.taskId,
+        limit: options.limit
+      }));
+      writePayload(metrics, options.json === true, stdout);
     });
 
   program

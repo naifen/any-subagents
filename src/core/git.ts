@@ -11,6 +11,13 @@ export const assertGitRef = async (repo: string, ref: string): Promise<void> => 
   await execRequired("git", ["rev-parse", "--verify", ref], repo);
 };
 
+export const assertCleanRepo = async (repo: string): Promise<void> => {
+  const status = await execGit(["status", "--porcelain"], repo);
+  if (status.stdout.trim().length > 0) {
+    throw new Error(`Source repository is dirty: ${repo}`);
+  }
+};
+
 export const excludeHarness = async (worktreePath: string): Promise<void> => {
   const gitPath = path.join(worktreePath, ".git");
   let gitDir = gitPath;
