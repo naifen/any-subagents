@@ -6,7 +6,7 @@ import type { Session } from "../schemas/index.js";
 import type { AppConfig } from "../config/schema.js";
 import type { MetricsRecorder } from "./metrics-recorder.js";
 import { ActiveLimitTracker, LimitPolicy } from "./limit-policy.js";
-import { terminalStatuses } from "../domain/status.js";
+import { terminalStatuses } from "./status.js";
 
 export interface QueuedTask {
   taskId: string;

@@ -1,6 +1,6 @@
 import { nowIso } from "../util/time.js";
 import { Store } from "../db/store.js";
-import { deriveGroupStatus, type TaskRuntimeStatus } from "../domain/status.js";
+import type { TaskRuntimeStatus } from "./status.js";
 import type { StoredAttempt } from "../db/store.js";
 
 export interface FinalizeAttemptInput {
@@ -16,7 +16,7 @@ export interface FinalizeAttemptInput {
  * Centralised state transition for ending a task attempt.
  *
  * Callers express intent (status + error, or a final attempt record);
- * persistence is delegated to store.finishAttempt in one transaction.
+ * persistence is delegated to store.finishTaskOutcome in one transaction.
  */
 export const finalizeAttempt = (store: Store, input: FinalizeAttemptInput): void => {
   const timestamp = nowIso();
@@ -37,14 +37,9 @@ export const finalizeAttempt = (store: Store, input: FinalizeAttemptInput): void
       : undefined);
 
   if (attempt) {
-    store.finishAttempt({ attempt, groupId: input.groupId });
+    store.finishTaskOutcome({ groupId: input.groupId, taskId: input.taskId, attempt });
     return;
   }
 
-  store.inTransaction(() => {
-    store.updateTaskStatus(input.taskId, input.status);
-    const tasks = store.listTasks({ group_id: input.groupId });
-    const groupStatus = deriveGroupStatus(tasks.map((task) => task.status as TaskRuntimeStatus));
-    store.updateGroupStatus(input.groupId, groupStatus);
-  });
+  store.finishTaskOutcome({ groupId: input.groupId, taskId: input.taskId, status: input.status });
 };

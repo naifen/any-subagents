@@ -17,7 +17,7 @@ import { execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
 import { writeHarnessFiles } from "./harness.js";
 import type { SessionBrief } from "../schemas/index.js";
-import { failureStatuses, type TaskRuntimeStatus } from "../domain/status.js";
+import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
 import { getAdapter, isKnownAdapter } from "../adapters/registry.js";
 import type { AttemptSpawner } from "../adapters/types.js";
 import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
@@ -234,7 +234,7 @@ export class TaskRunner {
       throw new Error(`Unsupported adapter: ${input.task.adapter}`);
     }
     return getAdapter(input.task.adapter).run({
-      task: input.task,
+      task: { task_id: input.task.task_id, envelope: input.task.envelope },
       sessionBrief: input.sessionBrief,
       attemptId: input.attemptId,
       worktreePath: input.worktreePath,

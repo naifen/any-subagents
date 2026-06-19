@@ -151,9 +151,8 @@ export const createCli = ({ plane, stdout = (text) => process.stdout.write(text)
     .command("get")
     .option("--artifact-id <id>", "artifact ID")
     .option("--resource-uri <uri>", "artifact resource URI")
-    .option("--include-path", "include local path")
     .option("--json", "write JSON")
-    .action(async (options: { artifactId?: string; resourceUri?: string; includePath?: boolean; json?: boolean }) => {
+    .action(async (options: { artifactId?: string; resourceUri?: string; json?: boolean }) => {
       const artifact = await plane.getArtifact(
         definedEntries({
           artifact_id: options.artifactId,

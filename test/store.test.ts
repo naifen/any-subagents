@@ -145,7 +145,53 @@ describe("Store", () => {
     expect(s.getGroup("grp_test")?.status).toBe("running");
   });
 
-  test("finishAttempt writes attempt once and derives group status", async () => {
+  test("startAttempt derives group status when sibling tasks remain queued", async () => {
+    const s = await makeStore();
+    s.insertSession(fakeSession());
+    s.insertGroup({
+      group_id: "grp_test",
+      session_id: "sess_test",
+      title: "Test",
+      status: "queued",
+      expected_brief_revision: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    const taskDefaults = {
+      session_id: "sess_test",
+      group_id: "grp_test",
+      status: "queued" as const,
+      mode: "research",
+      goal: "test",
+      adapter: "fake",
+      profile: "default",
+      envelope: fakeEnvelope(),
+      attempt_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    };
+    s.insertTask({ task_id: "task_running", ...taskDefaults });
+    s.insertTask({ task_id: "task_queued", ...taskDefaults });
+
+    s.startAttempt(
+      {
+        attempt_id: "att_1",
+        task_id: "task_running",
+        attempt_number: 1,
+        status: "running",
+        created_at: new Date().toISOString(),
+        updated_at: new Date().toISOString(),
+        started_at: new Date().toISOString()
+      },
+      "grp_test"
+    );
+
+    expect(s.getTask("task_running")?.status).toBe("running");
+    expect(s.getTask("task_queued")?.status).toBe("queued");
+    expect(s.getGroup("grp_test")?.status).toBe("running");
+  });
+
+  test("finishTaskOutcome writes attempt once and derives group status", async () => {
     const s = await makeStore();
     s.insertSession(fakeSession());
     s.insertGroup({
@@ -182,8 +228,9 @@ describe("Store", () => {
       started_at: new Date().toISOString()
     });
 
-    s.finishAttempt({
+    s.finishTaskOutcome({
       groupId: "grp_test",
+      taskId: "task_test",
       attempt: {
         attempt_id: "att_1",
         task_id: "task_test",
@@ -200,6 +247,39 @@ describe("Store", () => {
     expect(s.getAttempt("att_1")?.finished_at).toBeDefined();
     expect(s.getTask("task_test")?.status).toBe("completed");
     expect(s.getGroup("grp_test")?.status).toBe("completed");
+  });
+
+  test("finishTaskOutcome updates task without attempt row and derives group status", async () => {
+    const s = await makeStore();
+    s.insertSession(fakeSession());
+    s.insertGroup({
+      group_id: "grp_test",
+      session_id: "sess_test",
+      title: "Test",
+      status: "running",
+      expected_brief_revision: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+    s.insertTask({
+      task_id: "task_test",
+      session_id: "sess_test",
+      group_id: "grp_test",
+      status: "running",
+      mode: "research",
+      goal: "test",
+      adapter: "fake",
+      profile: "default",
+      envelope: fakeEnvelope(),
+      attempt_count: 0,
+      created_at: new Date().toISOString(),
+      updated_at: new Date().toISOString()
+    });
+
+    s.finishTaskOutcome({ taskId: "task_test", groupId: "grp_test", status: "cancelled" });
+
+    expect(s.getTask("task_test")?.status).toBe("cancelled");
+    expect(s.getGroup("grp_test")?.status).toBe("cancelled");
   });
 
   test("updateSessionBrief rejects stale revision", async () => {

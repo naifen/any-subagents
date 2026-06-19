@@ -1,5 +1,5 @@
 import type { ResultEnvelope } from "../schemas/index.js";
-import type { TaskRuntimeStatus } from "../domain/status.js";
+import type { TaskRuntimeStatus } from "../core/status.js";
 
 export interface StoredEvent {
   event_id: string;
@@ -99,3 +99,8 @@ export interface StoredAttempt {
   network_policy?: string;
   package_install_policy?: string;
 }
+
+/** Finalize with a full attempt row, or update task status only. Fields are mutually exclusive. */
+export type FinishTaskOutcomeInput =
+  | { groupId: string; taskId: string; attempt: StoredAttempt }
+  | { groupId: string; taskId: string; status: TaskRuntimeStatus };

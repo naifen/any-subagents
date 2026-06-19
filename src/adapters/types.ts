@@ -1,5 +1,9 @@
-import type { SessionBrief } from "../schemas/index.js";
-import type { StoredTask } from "../db/store.js";
+import type { SessionBrief, TaskEnvelope } from "../schemas/index.js";
+
+export interface AdapterRunTask {
+  task_id: string;
+  envelope: TaskEnvelope;
+}
 
 export interface AdapterHealthSnapshot {
   available: boolean;
@@ -29,7 +33,7 @@ export interface AttemptSpawner {
 }
 
 export interface AdapterRunContext {
-  task: StoredTask;
+  task: AdapterRunTask;
   sessionBrief: SessionBrief;
   attemptId: string;
   worktreePath: string;
@@ -44,6 +48,7 @@ export interface AdapterDoctorCheck {
 }
 
 export interface Adapter {
+  /** Implementations must be stateless; getAdapter() returns a new instance on each call. */
   readonly name: string;
   run(context: AdapterRunContext): Promise<AdapterRunOutcome>;
   health(): Promise<AdapterHealthSnapshot>;

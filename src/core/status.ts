@@ -95,6 +95,7 @@ export const deriveGroupStatus = (statuses: TaskRuntimeStatus[]): GroupStatus =>
   if (counts.running > 0 || counts.queued > 0) return "running";
   if (counts.completed === statuses.length) return "completed";
   if (counts.cancelled === statuses.length) return "cancelled";
+  // Story 26: blocked is terminal; an all-blocked group is a group-level failure.
   if (counts.blocked === statuses.length) return "failed";
   if (counts.failed > 0) return "failed";
 

@@ -32,7 +32,7 @@ import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
 import type { AdapterHealthSnapshot } from "../adapters/types.js";
 import type { KnownAdapter } from "../adapters/registry.js";
-import { terminalStatuses, type TaskRuntimeStatus } from "../domain/status.js";
+import { terminalStatuses, type TaskRuntimeStatus } from "./status.js";
 import { defaultConfig, type AppConfig } from "../config/schema.js";
 import { normalizeConfig } from "../config/normalize.js";
 import { forAudience, type ResultAudience } from "./audience.js";
@@ -54,6 +54,7 @@ export type { SubmitTaskGroupInput, CreateSessionInput };
 export interface ControlPlaneOptions {
   paths: RuntimePaths;
   config?: AppConfig;
+  /** Fixed for the lifetime of this instance; MCP uses "public", CLI/daemon use "internal". */
   audience?: ResultAudience;
 }
 

@@ -1,5 +1,5 @@
 import { describe, expect, test } from "vitest";
-import { countTaskStatuses, deriveGroupStatus } from "../src/domain/status.js";
+import { countTaskStatuses, deriveGroupStatus } from "../src/core/status.js";
 
 describe("countTaskStatuses", () => {
   test("counts every runtime status in one pass", () => {
