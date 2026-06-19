@@ -46,9 +46,11 @@ Test files live in `test/` and mirror source modules:
 | `daemon.test.ts` | Fastify daemon app |
 | `cli.test.ts` | CLI command parsing |
 | `codex-adapter.test.ts` | Codex adapter |
+| `codex-events.test.ts` | Codex JSONL event parsing |
 | `exec.test.ts` | Child-process execution |
 | `merge.test.ts` | Git merge logic |
 | `schemas.test.ts` | JSON schema generation |
+| `spawn-supervised.test.ts` | Supervised child-process spawning |
 | `doctor.test.ts` | Environment diagnostics |
 
 There is no coverage threshold configured. Add or update tests for every code change.
@@ -80,9 +82,9 @@ pnpm typecheck && pnpm test && pnpm build && pnpm schemas && git diff --exit-cod
 
 ```text
 src/
-├── adapters/      # Runtime-specific integrations (codex.ts, fake-script.ts)
+├── adapters/      # Runtime-specific integrations (codex.ts, codex-events.ts, fake-script.ts)
 ├── cli/           # Commander-based CLI entry point (main.ts, program.ts)
-├── core/          # Control plane, task runner, scheduler, lifecycle, exec, harness
+├── core/          # Control plane, task runner, scheduler, lifecycle, exec, harness, spawn-supervised
 ├── daemon/        # Fastify HTTP daemon (app.ts)
 ├── db/            # SQLite persistence (store.ts via better-sqlite3)
 ├── mcp/           # MCP server (main.ts, server.ts via @modelcontextprotocol/sdk)

@@ -28,7 +28,7 @@ Schedule, supervise, and aggregate work across multiple LLM agent processes — 
 - **Isolated git worktrees** — Each task attempt runs in its own worktree branched from the session's base ref, preventing cross-task interference
 - **Durable state** — SQLite-backed persistence for sessions, task groups, tasks, attempts, artifacts, and events — survives restarts
 - **Bounded concurrency** — The scheduler respects per-profile concurrency limits, queuing excess tasks automatically
-- **Structured result contract** — Subagents write a validated `result.json` envelope with status, findings, proposed brief updates, and artifact references
+- **Structured result contract** — Each attempt produces a validated `result.json` envelope with status, findings, proposed brief updates, and artifact references; the Codex adapter synthesizes it from JSONL telemetry, while other adapters may have the subagent write the file
 - **Dual interfaces** — Full-featured CLI for humans and scripts, plus an MCP server that any orchestrator agent can call as tools
 - **Merge integration** — Cherry-pick completed attempt diffs into a single integration worktree for review
 - **Environment diagnostics** — Built-in `doctor` command validates your setup without making model calls
@@ -55,11 +55,11 @@ Schedule, supervise, and aggregate work across multiple LLM agent processes — 
     ▼         ▼        ▼
 ┌────────┐┌────────┐┌────────┐
 │Subagent││Subagent││Subagent│  isolated worktrees
-│  (wt1) ││  (wt2) ││  (wt3) │  .any-subagents/result.json
+│  (wt1) ││  (wt2) ││  (wt3) │  adapter → result.json
 └────────┘└────────┘└────────┘
 ```
 
-The orchestrator creates a **session** tied to a repo and base ref. It then submits **task groups** — each a batch of independent **tasks** within a semantic phase. The control plane schedules tasks through an **adapter** (e.g., Codex), each running as a process in its own git worktree. When a subagent finishes, it writes a structured `result.json` that the control plane collects and surfaces back to the orchestrator.
+The orchestrator creates a **session** tied to a repo and base ref. It then submits **task groups** — each a batch of independent **tasks** within a semantic phase. The control plane schedules tasks through an **adapter** (e.g., Codex), each running as a process in its own git worktree. When an attempt finishes, the adapter produces a structured `result.json` — for Codex, synthesized from `codex exec --json` output — that the control plane validates and surfaces back to the orchestrator.
 
 > [!NOTE]
 > See `CONTEXT.md` for the full domain glossary including the precise meanings of *session*, *task group*, *task*, *task attempt*, *adapter*, *profile*, and other terms.
@@ -239,9 +239,9 @@ pnpm typecheck && pnpm test && pnpm build && pnpm schemas && git diff --exit-cod
 
 ```
 src/
-├── adapters/      # Runtime integrations (codex, fake-script)
+├── adapters/      # Runtime integrations (codex, codex-events, fake-script)
 ├── cli/           # Commander-based CLI
-├── core/          # Control plane, scheduler, task runner, lifecycle
+├── core/          # Control plane, scheduler, task runner, lifecycle, spawn-supervised
 ├── daemon/        # Fastify HTTP daemon
 ├── db/            # SQLite persistence (better-sqlite3)
 ├── mcp/           # MCP server (@modelcontextprotocol/sdk)
@@ -260,7 +260,7 @@ docs/
 
 ## Resources
 
-- [Architecture Decision Records](docs/adr/) — key design decisions and their rationale
+- [Architecture Decision Records](docs/adr/) — key design decisions and their rationale (including [ADR 0007: adapter-synthesized results](docs/adr/0007-adapter-synthesizes-result-contract.md) for Codex)
 - [Domain Glossary](CONTEXT.md) — precise terminology for sessions, tasks, adapters, and more
 - [Subagent Harness Contract](docs/design/subagent-harness.md) — the instruction wrapper given to every subagent
 - [V1 Architecture](docs/design/v1-architecture.md) — detailed system architecture
