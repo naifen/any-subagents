@@ -4,6 +4,7 @@ import Database from "better-sqlite3";
 import type { Artifact, Session, SessionBrief, TaskEnvelope } from "../schemas/index.js";
 import { nowIso } from "../util/time.js";
 import type { GroupStatus, TaskRuntimeStatus } from "../domain/status.js";
+import { deriveGroupStatus } from "../domain/status.js";
 import { runMigrations } from "./migrations.js";
 import * as eventStore from "./events.js";
 import * as metricStore from "./metrics.js";
@@ -263,6 +264,24 @@ export class Store {
 
   insertAttempt(attempt: StoredAttempt): void {
     attemptStore.insertAttempt(this.db, attempt);
+  }
+
+  startAttempt(attempt: StoredAttempt, groupId: string): void {
+    this.inTransaction(() => {
+      this.insertAttempt(attempt);
+      this.updateTaskStatus(attempt.task_id, "running", attempt.attempt_id);
+      this.updateGroupStatus(groupId, "running");
+    });
+  }
+
+  finishAttempt(input: { attempt: StoredAttempt; groupId: string }): void {
+    this.inTransaction(() => {
+      this.updateAttempt(input.attempt);
+      this.updateTaskStatus(input.attempt.task_id, input.attempt.status as TaskRuntimeStatus, input.attempt.attempt_id);
+      const tasks = this.listTasks({ group_id: input.groupId });
+      const groupStatus = deriveGroupStatus(tasks.map((task) => task.status as TaskRuntimeStatus));
+      this.updateGroupStatus(input.groupId, groupStatus);
+    });
   }
 
   getAttempt(attemptId: string): StoredAttempt | undefined {

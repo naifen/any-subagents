@@ -82,9 +82,7 @@ export class TaskRunner {
       ...(policy.networkPolicy ? { network_policy: policy.networkPolicy } : {}),
       ...(policy.packageInstallPolicy ? { package_install_policy: policy.packageInstallPolicy } : {})
     };
-    this.store.insertAttempt(attempt);
-    this.store.updateTaskStatus(task.task_id, "running", attemptId);
-    this.store.updateGroupStatus(task.group_id, "running");
+    this.store.startAttempt(attempt, task.group_id);
 
     const worktreePath = await createTaskWorktree({ session, task, paths: this.paths, metrics: this.metrics });
     const harnessDir = path.join(worktreePath, ".any-subagents");
@@ -177,7 +175,6 @@ export class TaskRunner {
       updated_at: nowIso(),
       finished_at: nowIso()
     };
-    this.store.updateAttempt(currentAttempt);
     await registerAttemptEvidence({
       store: this.store,
       config: this.config,
@@ -219,7 +216,8 @@ export class TaskRunner {
       taskId: task.task_id,
       groupId: task.group_id,
       status,
-      ...(error ? { error } : {})
+      ...(error ? { error } : {}),
+      attempt: currentAttempt
     });
     return { attemptId, status };
   }
