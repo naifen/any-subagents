@@ -2,18 +2,17 @@ import type { RuntimePaths } from "../storage/paths.js";
 import { schemaVersion, type EffectiveConfig } from "../schemas/index.js";
 import type { AppConfig, ProfileConfig } from "./schema.js";
 import { globalConcurrency } from "./normalize.js";
-import { adapterDefinitions, defaultProfileMap } from "../adapters/registry.js";
-import type { CodexHealth } from "../adapters/codex.js";
-
-const codexUnavailableMessage = "Codex CLI not available";
+import { adapterRegistry } from "../adapters/registry.js";
+import type { AdapterHealthSnapshot } from "../adapters/types.js";
+import type { KnownAdapter } from "../adapters/registry.js";
 
 export const buildEffectiveConfig = (
   config: AppConfig,
   paths: RuntimePaths,
-  codexHealth: CodexHealth
+  adapterHealth: Record<KnownAdapter, AdapterHealthSnapshot>
 ): EffectiveConfig => {
   const globalLimit = globalConcurrency(config);
-  const defaultProfiles = defaultProfileMap();
+  const defaultProfiles = Object.fromEntries(adapterRegistry.map((adapter) => [adapter.name, adapter.defaultProfiles]));
   const configuredProfiles = config.profiles ?? {};
   const adapterNames = new Set([...Object.keys(defaultProfiles), ...Object.keys(configuredProfiles)]);
   const profiles = Object.fromEntries(
@@ -40,24 +39,14 @@ export const buildEffectiveConfig = (
   );
 
   const adapters = Object.fromEntries(
-    [...adapterDefinitions().values()].map((adapter) => {
-      if (adapter.name === "codex") {
-        return [
-          adapter.name,
-          {
-            available: codexHealth.available,
-            ...(codexHealth.available
-              ? { version: codexHealth.version }
-              : { reason: codexHealth.reason ?? codexUnavailableMessage }),
-            supports_native_skills: adapter.capabilities.supports_native_skills,
-            supports_skill_paths: adapter.capabilities.supports_skill_paths
-          }
-        ];
-      }
+    adapterRegistry.map((adapter) => {
+      const health = adapterHealth[adapter.name];
       return [
         adapter.name,
         {
-          available: true,
+          available: health.available,
+          ...(health.available && health.version ? { version: health.version } : {}),
+          ...(!health.available && health.reason ? { reason: health.reason } : {}),
           supports_native_skills: adapter.capabilities.supports_native_skills,
           supports_skill_paths: adapter.capabilities.supports_skill_paths
         }

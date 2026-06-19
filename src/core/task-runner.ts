@@ -6,7 +6,6 @@ import {
   resultEnvelopeSchema,
   type ResultEnvelope,
   type Session,
-  type TaskEnvelope
 } from "../schemas/index.js";
 import { newAttemptId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
@@ -16,20 +15,11 @@ import { registerAttemptEvidence } from "./attempt-evidence.js";
 import { resolveTaskProfilePolicy } from "./task-policy.js";
 import { execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
-import { writeHarnessFiles, type HarnessInput } from "./harness.js";
-import {
-  appendCodexJsonlLines,
-  CODEX_COMMAND,
-  flushCodexJsonlBuffer
-} from "../adapters/codex-events.js";
-import {
-  buildCodexArgs,
-  renderCodexPrompt,
-  synthesizeResult
-} from "../adapters/codex.js";
+import { writeHarnessFiles } from "./harness.js";
 import type { SessionBrief } from "../schemas/index.js";
 import { failureStatuses, type TaskRuntimeStatus } from "../domain/status.js";
-import { isKnownAdapter } from "../adapters/registry.js";
+import { getAdapter, isKnownAdapter } from "../adapters/registry.js";
+import type { AttemptSpawner } from "../adapters/types.js";
 import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
 import type { AppConfig } from "../config/schema.js";
 import { defaultConfig } from "../config/schema.js";
@@ -242,89 +232,24 @@ export class TaskRunner {
     logPath: string;
     resultPath: string;
   }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
-    // `adapter` is an open string by design (provider-neutral), so narrow to the
-    // set this harness implements before an exhaustive switch guarantees that a
-    // newly listed adapter cannot be silently left unhandled.
     if (!isKnownAdapter(input.task.adapter)) {
       throw new Error(`Unsupported adapter: ${input.task.adapter}`);
     }
-    const adapter = input.task.adapter;
-    switch (adapter) {
-      case "codex":
-        return this.runCodexAdapter(input);
-      case "fake":
-        return this.runFakeAdapter(input);
-      default: {
-        const unhandled: never = adapter;
-        throw new Error(`Unsupported adapter: ${String(unhandled)}`);
-      }
-    }
-  }
-
-  private async runFakeAdapter(input: {
-    task: StoredTask;
-    attemptId: string;
-    worktreePath: string;
-    logPath: string;
-  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
-    return spawnSupervised(this.running, {
-      taskId: input.task.task_id,
+    return getAdapter(input.task.adapter).run({
+      task: input.task,
+      sessionBrief: input.sessionBrief,
       attemptId: input.attemptId,
-      command: process.execPath,
-      args: [path.join(input.worktreePath, ".any-subagents", "fake-adapter.mjs")],
-      cwd: input.worktreePath,
-      logPath: input.logPath,
-      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms })
-    });
-  }
-
-  private async runCodexAdapter(input: {
-    task: StoredTask;
-    sessionBrief: SessionBrief;
-    attemptId: string;
-    worktreePath: string;
-    logPath: string;
-    resultPath: string;
-  }): Promise<{ cancelled: boolean; timedOut: boolean; exitCode: number | null }> {
-    const prompt = renderCodexPrompt(input.task.envelope, input.sessionBrief);
-    const args = buildCodexArgs({
       worktreePath: input.worktreePath,
-      ...(input.task.envelope.model ? { model: input.task.envelope.model } : {}),
-      ...(input.task.envelope.reasoning_level ? { reasoning_level: input.task.envelope.reasoning_level } : {}),
-      prompt
-    });
-
-    const jsonlLines: string[] = [];
-    let jsonlBuffer = "";
-    const spawnResult = await spawnSupervised(this.running, {
-      taskId: input.task.task_id,
-      attemptId: input.attemptId,
-      command: CODEX_COMMAND,
-      args,
-      cwd: input.worktreePath,
       logPath: input.logPath,
-      ...(input.task.envelope.timeout_ms === undefined ? {} : { timeoutMs: input.task.envelope.timeout_ms }),
-      captureStdout: (chunk) => {
-        const parsed = appendCodexJsonlLines(jsonlBuffer, chunk);
-        jsonlBuffer = parsed.buffer;
-        jsonlLines.push(...parsed.lines);
-      }
+      resultPath: input.resultPath,
+      spawn: this.attemptSpawner()
     });
-    jsonlLines.push(...flushCodexJsonlBuffer(jsonlBuffer));
+  }
 
-    // Harness-owned path (ADR 0007): the Codex adapter synthesizes result.json
-    // itself so the shared finalization path can treat every adapter uniformly.
-    // codex exec is not instructed to write this file.
-    const result = synthesizeResult({
-      taskId: input.task.task_id,
-      attemptId: input.attemptId,
-      mode: input.task.envelope.mode,
-      exitCode: spawnResult.exitCode,
-      jsonlLines
-    });
-    await writeFile(input.resultPath, `${JSON.stringify(result, null, 2)}\n`);
-
-    return spawnResult;
+  private attemptSpawner(): AttemptSpawner {
+    return {
+      spawn: (spawnInput) => spawnSupervised(this.running, spawnInput)
+    };
   }
 
   private async parseResultFile(resultPath: string, taskId: string, attemptId: string): Promise<

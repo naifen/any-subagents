@@ -11,7 +11,7 @@ import {
   type EffectiveConfig,
   type CreateSessionInput
 } from "../schemas/index.js";
-import { adapterDefinitions } from "../adapters/registry.js";
+import { adapterDefinitions, getAdapter, knownAdapters } from "../adapters/registry.js";
 import { buildEffectiveConfig } from "../config/effective-config.js";
 import { newSessionId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
@@ -30,8 +30,8 @@ import { execFileResult } from "./exec.js";
 import { NotFoundError } from "./errors.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
-import { checkCodexAdapterHealth, type CodexHealth } from "../adapters/codex.js";
-import { CODEX_COMMAND } from "../adapters/codex-events.js";
+import type { AdapterHealthSnapshot } from "../adapters/types.js";
+import type { KnownAdapter } from "../adapters/registry.js";
 import { terminalStatuses, type TaskRuntimeStatus } from "../domain/status.js";
 import { defaultConfig, type AppConfig } from "../config/schema.js";
 import { normalizeConfig } from "../config/normalize.js";
@@ -71,14 +71,13 @@ export interface TaskSummary {
 
 export const createControlPlane = (options: ControlPlaneOptions): ControlPlane => new ControlPlane(options);
 
-const codexUnavailableMessage = "Codex CLI not available";
-const codexHealthTtlMs = 30_000;
+const adapterHealthTtlMs = 30_000;
 
 export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
   private readonly config: AppConfig;
-  private codexHealthCache?: { probedAt: number; health: Promise<CodexHealth> };
+  private adapterHealthCache?: { probedAt: number; health: Promise<Record<KnownAdapter, AdapterHealthSnapshot>> };
 
   constructor(private readonly options: ControlPlaneOptions) {
     const baseConfig = options.config ?? defaultConfig();
@@ -350,8 +349,8 @@ export class ControlPlane {
   }
 
   async getEffectiveConfig(): Promise<EffectiveConfig> {
-    const codexHealth = await this.probeCodexHealth();
-    return buildEffectiveConfig(this.config, this.options.paths, codexHealth);
+    const adapterHealth = await this.probeAdapterHealth();
+    return buildEffectiveConfig(this.config, this.options.paths, adapterHealth);
   }
 
   async doctor(): Promise<{
@@ -377,15 +376,16 @@ export class ControlPlane {
       status: storageOk.every(Boolean) ? "pass" : "fail",
       message: "Required storage directories are present"
     });
-    checks.push({ name: "fake_adapter", status: "pass", message: "Fake adapter is built in" });
-    const codexHealth = await this.probeCodexHealth();
-    checks.push({
-      name: "codex_adapter",
-      status: codexHealth.available ? "pass" : "warn",
-      message: codexHealth.available
-        ? `Codex CLI available (${codexHealth.version ?? "unknown version"})`
-        : (codexHealth.reason ?? codexUnavailableMessage)
-    });
+    const adapterHealth = await this.probeAdapterHealth();
+    for (const name of knownAdapters) {
+      const health = adapterHealth[name];
+      const doctorCheck = getAdapter(name).doctorCheck(health);
+      checks.push({
+        name: `${name}_adapter`,
+        status: doctorCheck.status,
+        message: doctorCheck.message
+      });
+    }
 
     return {
       status: checks.some((check) => check.status === "fail") ? "degraded" : "healthy",
@@ -413,12 +413,17 @@ export class ControlPlane {
     return attempt;
   }
 
-  private probeCodexHealth(): Promise<CodexHealth> {
+  private probeAdapterHealth(): Promise<Record<KnownAdapter, AdapterHealthSnapshot>> {
     const now = Date.now();
-    if (!this.codexHealthCache || now - this.codexHealthCache.probedAt > codexHealthTtlMs) {
-      this.codexHealthCache = { probedAt: now, health: checkCodexAdapterHealth({ command: CODEX_COMMAND }) };
+    if (!this.adapterHealthCache || now - this.adapterHealthCache.probedAt > adapterHealthTtlMs) {
+      this.adapterHealthCache = {
+        probedAt: now,
+        health: Promise.all(
+          knownAdapters.map(async (name) => [name, await getAdapter(name).health()] as const)
+        ).then((entries) => Object.fromEntries(entries) as Record<KnownAdapter, AdapterHealthSnapshot>)
+      };
     }
-    return this.codexHealthCache.health;
+    return this.adapterHealthCache.health;
   }
 }
 
