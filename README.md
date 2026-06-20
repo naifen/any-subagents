@@ -43,14 +43,14 @@ Schedule, supervise, and aggregate work across multiple LLM agent processes — 
          │  create_session / submit_task_group / query_tasks
          ▼
 ┌─────────────────┐
-│  Control Plane   │  any-subagents daemon
+│  Control Plane   │  CLI / MCP entry points
 │  ┌─────────────┐ │
 │  │  Scheduler   │ │  bounded concurrency, retry policy
 │  │  Store (SQL) │ │  durable session/task/attempt state
 │  │  Harness     │ │  contract-first instruction wrapper
 │  └─────────────┘ │
 └────────┬────────┘
-         │  spawn via adapter (codex, fake-script, …)
+         │  spawn via adapter (codex, fake, …)
     ┌────┴────┬────────┐
     ▼         ▼        ▼
 ┌────────┐┌────────┐┌────────┐
@@ -98,9 +98,11 @@ any-subagents doctor
 # List configured adapters
 any-subagents adapters
 
-# Show resolved configuration
+# Show resolved configuration (see docs/mcp-cli-usage.md for config.toml options)
 any-subagents effective-config
 ```
+
+Optional local configuration: `~/.config/any-subagents/config.toml` or `./any-subagents.toml`. See [MCP and CLI usage](docs/mcp-cli-usage.md) for all options.
 
 ## Effective Usage
 
@@ -133,16 +135,18 @@ any-subagents task-group submit --json-input '{
   "expected_brief_revision": 0,
   "tasks": [
     {
-      "title": "Audit current JWT usage",
-      "instructions": "Find all JWT creation, validation, and refresh points...",
-      "mode": "code",
-      "adapter": "codex"
+      "mode": "research",
+      "goal": "Audit current JWT usage across the codebase",
+      "adapter": "codex",
+      "profile": "default",
+      "success_criteria": ["All JWT creation and validation sites documented"]
     },
     {
-      "title": "Spike session-token schema",
-      "instructions": "Design the session token DB schema and propose migrations...",
-      "mode": "code",
-      "adapter": "codex"
+      "mode": "plan",
+      "goal": "Design session-token schema and migration approach",
+      "adapter": "codex",
+      "profile": "default",
+      "success_criteria": ["Schema proposal with migration steps"]
     }
   ]
 }'
@@ -175,7 +179,7 @@ Once you've reviewed results and chosen the best attempts, merge their diffs int
 
 ### 5. Use the MCP server for agent-driven orchestration
 
-The MCP server exposes the same capabilities as the CLI, but as tools that orchestrator agents can call programmatically:
+The MCP server exposes the same capabilities as the CLI, but as tools that orchestrator agents can call programmatically. MCP responses omit raw local filesystem paths from attempts and artifacts; the CLI retains them for local debugging.
 
 | MCP Tool | What it does |
 | --- | --- |
@@ -239,11 +243,13 @@ pnpm typecheck && pnpm test && pnpm build && pnpm schemas && git diff --exit-cod
 
 ```
 src/
-├── adapters/      # Runtime integrations (codex, codex-events, fake-script)
+├── adapters/      # Adapter registry, types, codex/fake adapters (fake-script = harness entrypoint)
 ├── cli/           # Commander-based CLI
+├── config/        # TOML config schema, load/normalize
 ├── core/          # Control plane, scheduler, task runner, lifecycle, spawn-supervised
 ├── daemon/        # Fastify HTTP daemon
 ├── db/            # SQLite persistence (better-sqlite3)
+├── domain/        # Task/group runtime status derivation
 ├── mcp/           # MCP server (@modelcontextprotocol/sdk)
 ├── schemas/       # Zod schemas → JSON schema generation
 ├── storage/       # File-system storage utilities
@@ -255,11 +261,13 @@ docs/
 ├── adr/           # Architecture Decision Records
 ├── agents/        # Agent-specific docs (issue tracker, triage, domain)
 ├── design/        # Design docs (PRD, architecture, harness, schemas)
+├── mcp-cli-usage.md  # MCP setup, CLI usage, and config.toml reference
 └── usage/         # Usage documentation
 ```
 
 ## Resources
 
+- [MCP and CLI Usage](docs/mcp-cli-usage.md) — MCP setup, CLI workflows, and `config.toml` reference
 - [Architecture Decision Records](docs/adr/) — key design decisions and their rationale (including [ADR 0007: adapter-synthesized results](docs/adr/0007-adapter-synthesizes-result-contract.md) for Codex)
 - [Domain Glossary](CONTEXT.md) — precise terminology for sessions, tasks, adapters, and more
 - [Subagent Harness Contract](docs/design/subagent-harness.md) — the instruction wrapper given to every subagent

@@ -4,12 +4,21 @@ import Database from "better-sqlite3";
 import type { Artifact, Session, SessionBrief, TaskEnvelope } from "../schemas/index.js";
 import { nowIso } from "../util/time.js";
 import type { GroupStatus, TaskRuntimeStatus } from "../domain/status.js";
+import { deriveGroupStatus } from "../domain/status.js";
 import { runMigrations } from "./migrations.js";
 import * as eventStore from "./events.js";
 import * as metricStore from "./metrics.js";
 import * as attemptStore from "./attempts.js";
 import { buildWhereClause, jsonColumn } from "./query-helpers.js";
-import type { EventInput, RecoverInterruptedResult, RecordMetricInput, StoredAttempt, StoredEvent, StoredMetric } from "./store-types.js";
+import type {
+  EventInput,
+  FinishTaskOutcomeInput,
+  RecoverInterruptedResult,
+  RecordMetricInput,
+  StoredAttempt,
+  StoredEvent,
+  StoredMetric
+} from "./store-types.js";
 
 export type {
   EventInput,
@@ -263,6 +272,32 @@ export class Store {
 
   insertAttempt(attempt: StoredAttempt): void {
     attemptStore.insertAttempt(this.db, attempt);
+  }
+
+  startAttempt(attempt: StoredAttempt, groupId: string): void {
+    this.inTransaction(() => {
+      this.insertAttempt(attempt);
+      this.updateTaskStatus(attempt.task_id, "running", attempt.attempt_id);
+      this.refreshGroupStatus(groupId);
+    });
+  }
+
+  finishTaskOutcome(input: FinishTaskOutcomeInput): void {
+    this.inTransaction(() => {
+      if ("attempt" in input) {
+        this.updateAttempt(input.attempt);
+        this.updateTaskStatus(input.taskId, input.attempt.status, input.attempt.attempt_id);
+      } else {
+        this.updateTaskStatus(input.taskId, input.status);
+      }
+      this.refreshGroupStatus(input.groupId);
+    });
+  }
+
+  private refreshGroupStatus(groupId: string): void {
+    const tasks = this.listTasks({ group_id: groupId });
+    const groupStatus = deriveGroupStatus(tasks.map((task) => task.status as TaskRuntimeStatus));
+    this.updateGroupStatus(groupId, groupStatus);
   }
 
   getAttempt(attemptId: string): StoredAttempt | undefined {

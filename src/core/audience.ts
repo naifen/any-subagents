@@ -1,6 +1,8 @@
 import type { StoredArtifact, StoredAttempt } from "../db/store.js";
 import type { MergeAttemptsResult } from "./merge-attempts.js";
 
+/** Path redaction for result reads. Audience is fixed at ControlPlane construction (MCP=public, CLI/daemon=internal). */
+
 export type ResultAudience = "internal" | "public";
 export type MergeTasksResult = MergeAttemptsResult;
 
@@ -30,5 +32,5 @@ export const forAudience = {
   attempt: (attempt: StoredAttempt, audience: ResultAudience): StoredAttempt =>
     audience === "public" ? stripAttemptPaths(attempt) : attempt,
   artifact: (artifact: StoredArtifact, audience: ResultAudience): StoredArtifact =>
-    audience === "public" ? stripArtifactPath(artifact) : artifact,
+    audience === "public" ? stripArtifactPath(artifact) : artifact
 };

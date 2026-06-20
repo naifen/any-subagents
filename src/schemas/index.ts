@@ -107,6 +107,7 @@ export const taskGroupSchema = z
   })
   .strict();
 
+/** Public API contract for attempt records (MCP/CLI JSON). Persistence uses `StoredAttempt` in the db layer. */
 export const taskAttemptSchema = z
   .object({
     schema_version: z.literal(schemaVersion),

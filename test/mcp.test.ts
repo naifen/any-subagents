@@ -42,9 +42,10 @@ describe("MCP server", () => {
     await Promise.all([client.close(), server.close()]);
   });
 
-  test("get_task_result omits local attempt paths", async () => {
+  test("get_task_result omits local attempt paths even with internal-audience plane", async () => {
     const repo = await createTempGitRepo();
-    const plane = createTestControlPlane(await createTestRuntimePaths(), { globalConcurrency: 1 });
+    const paths = await createTestRuntimePaths();
+    const plane = createTestControlPlane(paths, { globalConcurrency: 1 });
     planes.push(plane);
     const server = createAnySubagentsMcpServer({ plane });
     const client = new Client({ name: "test-client", version: "1.0.0" });
@@ -78,6 +79,46 @@ describe("MCP server", () => {
     expect(cliResult.attempt.worktree_path).toBeDefined();
     expect(cliResult.attempt.log_path).toBeDefined();
     expect(cliResult.attempt.result_path).toBeDefined();
+
+    await Promise.all([client.close(), server.close()]);
+  });
+
+  test("list_artifacts omits local artifact paths even with internal-audience plane", async () => {
+    const repo = await createTempGitRepo();
+    const paths = await createTestRuntimePaths();
+    const plane = createTestControlPlane(paths, { globalConcurrency: 1 });
+    planes.push(plane);
+    const server = createAnySubagentsMcpServer({ plane });
+    const client = new Client({ name: "test-client", version: "1.0.0" });
+    const [clientTransport, serverTransport] = createLinkedTransports();
+    await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "MCP artifact path hiding." } });
+    const group = await plane.submitTaskGroup({
+      session_id: session.session_id,
+      title: "Artifact path hiding",
+      expected_brief_revision: session.brief_revision,
+      tasks: [{
+        mode: "research",
+        goal: "Complete without leaking artifact paths.",
+        adapter: "fake",
+        profile: "default",
+        success_criteria: ["Done."]
+      }]
+    });
+    await plane.waitForTaskGroup(group.group_id, 5_000);
+    const tasks = await plane.queryTasks({ group_id: group.group_id });
+    const taskId = tasks.tasks[0]!.task_id;
+
+    const mcpArtifacts = await client.callTool({ name: "list_artifacts", arguments: { task_id: taskId } });
+    const artifacts = (mcpArtifacts.structuredContent as { artifacts: Array<Record<string, unknown>> }).artifacts;
+    expect(artifacts.length).toBeGreaterThan(0);
+    for (const artifact of artifacts) {
+      expect(artifact).not.toHaveProperty("path");
+    }
+
+    const cliArtifacts = await plane.listArtifacts({ task_id: taskId });
+    expect(cliArtifacts.artifacts.some((artifact) => artifact.path !== undefined)).toBe(true);
 
     await Promise.all([client.close(), server.close()]);
   });

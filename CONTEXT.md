@@ -23,10 +23,12 @@
   metadata, logs, worktree, result files, diffs, verification output, and
   evidence artifacts.
 - Adapter: the runtime-specific integration that launches and supervises a
-  subagent, such as the built-in Codex adapter.
+  subagent. v1 registers built-in adapters (`codex`, `fake`) behind an
+  `Adapter` interface (`run`, `health`, `doctorCheck`) resolved via the adapter
+  registry.
 - Profile: a named adapter configuration containing defaults and allowlists for
-  model, reasoning level, command template, sandbox settings, permissions,
-  budgets, and concurrency.
+  model, reasoning level, concurrency, timeout, sandbox settings, permissions,
+  and network/package-install policy.
 - Artifact: a typed output record for text, code, diffs, logs, evidence,
   benchmarks, coverage, screenshots, recordings, or arbitrary files.
 - Harness Directory: the `.any-subagents/` directory written into a task
@@ -40,8 +42,10 @@
   back to its task group's, then to its session's. Higher numbers run first.
 - Resource Limit: a configured ceiling on concurrent attempts at the global,
   provider, repo, group, or task level. Distinct from a Budget (token/cost).
-- Budget Exhaustion Policy: what a task group does when its budget is spent —
-  `stop_starting` (let running attempts finish) or `cancel_running`.
+- Capacity Preemption Policy: what the scheduler does when concurrency limits
+  are saturated — `stop_starting` (stop dequeuing) or `cancel_running` (preempt
+  a lower-priority running task). Config key: `capacity_preemption_policy`.
+  Deprecated alias: `budget_exhaustion_policy`.
 - Interrupted: the terminal status applied to an attempt that was `running` when
   the daemon restarted. Evidence is preserved; the orchestrator decides retry.
 - Redaction: best-effort replacement of secrets (and optionally sensitive
@@ -60,15 +64,21 @@
 - Task Runner: manages the full lifecycle of a single task attempt — worktree
   creation, harness setup, adapter execution, result parsing, verification,
   evidence registration, and finalization.
-- Finalize Attempt: the centralised three-step state transition that ends
-  every task attempt: (1) update the attempt record, (2) update the task
-  status, (3) re-derive the group status. All terminal paths route through it.
+- Finalize Attempt: the centralised state transition that ends every task
+  attempt. Callers route through `finalizeAttempt`; persistence runs in one
+  SQLite transaction via `store.finishTaskOutcome` or `store.startAttempt`
+  (attempt update, task status, group re-derivation).
 - Task Runtime Status: the finite set of statuses a task can reach: `queued`,
   `running`, `completed`, `blocked`, `failed`, `timed_out`, `cancelled`,
   `interrupted`, `failed_contract`, `completed_with_failed_verification`.
 - Group Status: the derived aggregate status of a task group: `queued`,
   `running`, `completed`, `failed`, `cancelled`, `mixed`. Computed by counting
-  task statuses, not by priority ordering.
+  task statuses, not by priority ordering. An all-`blocked` group derives
+  `failed`.
+- Result Audience: path visibility for read APIs. MCP uses a public audience
+  (local paths stripped from attempts and artifacts); CLI and daemon use an
+  internal audience. The MCP server also enforces public redaction at its
+  boundary regardless of control-plane construction.
 - Verification Command: a shell command run by the control plane after an
   adapter exits to validate the subagent's work. Failure produces
   `completed_with_failed_verification` rather than `failed`.
@@ -119,8 +129,9 @@ orchestrator accepted or rejected those updates."
 
 ## Flagged Ambiguities
 
-- External adapter protocol: v1 keeps Codex built in while shaping the boundary
-  for future external adapter processes.
+- External adapter protocol: v1 ships Codex and fake adapters behind a registry
+  seam; future external adapter processes can plug in without rewriting the
+  task runner.
 - Runtime DAG support: v1 represents dependencies through later task groups,
   not task-level dependencies inside a group.
 - Mid-task elicitation: v1 uses terminal `blocked` results; runtime-mediated

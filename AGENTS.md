@@ -45,8 +45,11 @@ Test files live in `test/` and mirror source modules:
 | `mcp.test.ts` | MCP server tools |
 | `daemon.test.ts` | Fastify daemon app |
 | `cli.test.ts` | CLI command parsing |
+| `adapter-seam.test.ts` | Adapter registry and `Adapter` interface |
+| `audience.test.ts` | MCP/CLI path redaction by audience |
 | `codex-adapter.test.ts` | Codex adapter |
 | `codex-events.test.ts` | Codex JSONL event parsing |
+| `status.test.ts` | Task/group status derivation |
 | `exec.test.ts` | Child-process execution |
 | `merge.test.ts` | Git merge logic |
 | `schemas.test.ts` | JSON schema generation |
@@ -82,11 +85,13 @@ pnpm typecheck && pnpm test && pnpm build && pnpm schemas && git diff --exit-cod
 
 ```text
 src/
-├── adapters/      # Runtime-specific integrations (codex.ts, codex-events.ts, fake-script.ts)
+├── adapters/      # Adapter registry, types, and built-ins (codex-adapter, fake-adapter, codex, fake-script harness)
 ├── cli/           # Commander-based CLI entry point (main.ts, program.ts)
+├── config/        # TOML config schema, load/normalize, effective-config
 ├── core/          # Control plane, task runner, scheduler, lifecycle, exec, harness, spawn-supervised
 ├── daemon/        # Fastify HTTP daemon (app.ts)
 ├── db/            # SQLite persistence (store.ts via better-sqlite3)
+├── domain/        # Task/group runtime status types and derivation
 ├── mcp/           # MCP server (main.ts, server.ts via @modelcontextprotocol/sdk)
 ├── schemas/       # Zod schemas → JSON schema generation
 ├── storage/       # File-system storage utilities

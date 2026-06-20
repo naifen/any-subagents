@@ -11,7 +11,7 @@ import {
   type EffectiveConfig,
   type CreateSessionInput
 } from "../schemas/index.js";
-import { adapterDefinitions } from "../adapters/registry.js";
+import { adapterCapabilities, adapterDefaultProfiles, getAdapter, knownAdapters } from "../adapters/registry.js";
 import { buildEffectiveConfig } from "../config/effective-config.js";
 import { newSessionId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
@@ -30,8 +30,8 @@ import { execFileResult } from "./exec.js";
 import { NotFoundError } from "./errors.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
-import { checkCodexAdapterHealth, type CodexHealth } from "../adapters/codex.js";
-import { CODEX_COMMAND } from "../adapters/codex-events.js";
+import type { Adapter, AdapterHealthSnapshot } from "../adapters/types.js";
+import type { KnownAdapter } from "../adapters/registry.js";
 import { terminalStatuses, type TaskRuntimeStatus } from "../domain/status.js";
 import { defaultConfig, type AppConfig } from "../config/schema.js";
 import { normalizeConfig } from "../config/normalize.js";
@@ -54,6 +54,8 @@ export type { SubmitTaskGroupInput, CreateSessionInput };
 export interface ControlPlaneOptions {
   paths: RuntimePaths;
   config?: AppConfig;
+  /** Fixed for the lifetime of this instance; MCP uses "public", CLI/daemon use "internal". */
+  audience?: ResultAudience;
 }
 
 export interface TaskSummary {
@@ -71,18 +73,23 @@ export interface TaskSummary {
 
 export const createControlPlane = (options: ControlPlaneOptions): ControlPlane => new ControlPlane(options);
 
-const codexUnavailableMessage = "Codex CLI not available";
-const codexHealthTtlMs = 30_000;
+const adapterHealthTtlMs = 30_000;
 
 export class ControlPlane {
   private readonly store: Store;
   private readonly scheduler: Scheduler;
   private readonly config: AppConfig;
-  private codexHealthCache?: { probedAt: number; health: Promise<CodexHealth> };
+  private readonly audience: ResultAudience;
+  private readonly adapters = Object.fromEntries(knownAdapters.map((name) => [name, getAdapter(name)])) as Record<
+    KnownAdapter,
+    Adapter
+  >;
+  private adapterHealthCache?: { probedAt: number; health: Promise<Record<KnownAdapter, AdapterHealthSnapshot>> };
 
   constructor(private readonly options: ControlPlaneOptions) {
     const baseConfig = options.config ?? defaultConfig();
     this.config = normalizeConfig(baseConfig);
+    this.audience = options.audience ?? "internal";
     this.store = new Store(options.paths.dbPath);
     const running = new Map<string, RunningAttempt>();
     const metrics = createMetricsRecorder(this.store);
@@ -196,14 +203,12 @@ export class ControlPlane {
   }
 
   async getTaskResult(
-    input: { task_id: string; attempt_id?: string },
-    options: { audience?: ResultAudience } = {}
+    input: { task_id: string; attempt_id?: string }
   ): Promise<{
     task: TaskSummary;
     attempt: StoredAttempt;
     result?: ResultEnvelope;
   }> {
-    const audience = options.audience ?? "internal";
     const task = this.requireTask(input.task_id);
     const attempt = input.attempt_id ? this.store.getAttempt(input.attempt_id) : this.store.getLatestAttemptForTask(task.task_id);
     if (!attempt) {
@@ -211,7 +216,7 @@ export class ControlPlane {
     }
     return {
       task: summarizeTask(task),
-      attempt: forAudience.attempt(attempt, audience),
+      attempt: forAudience.attempt(attempt, this.audience),
       ...(attempt.result ? { result: attempt.result } : {})
     };
   }
@@ -239,18 +244,17 @@ export class ControlPlane {
   // ─── Artifacts ──────────────────────────────────────────────────
 
   async listArtifacts(
-    filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string },
-    options: { audience?: ResultAudience } = {}
+    filter: { session_id?: string; group_id?: string; task_id?: string; attempt_id?: string }
   ): Promise<{
     artifacts: StoredArtifact[];
   }> {
-    const audience = options.audience ?? "public";
-    return { artifacts: this.store.listArtifacts(filter).map((artifact) => forAudience.artifact(artifact, audience)) };
+    return {
+      artifacts: this.store.listArtifacts(filter).map((artifact) => forAudience.artifact(artifact, this.audience))
+    };
   }
 
   async getArtifact(
-    input: { artifact_id?: string; resource_uri?: string },
-    options: { audience?: ResultAudience } = {}
+    input: { artifact_id?: string; resource_uri?: string }
   ): Promise<StoredArtifact> {
     if (!input.artifact_id && !input.resource_uri) {
       throw new Error("Either artifact_id or resource_uri must be provided");
@@ -261,7 +265,7 @@ export class ControlPlane {
     if (!artifact) {
       throw new NotFoundError("Artifact", input.artifact_id ?? input.resource_uri ?? "unknown");
     }
-    return forAudience.artifact(artifact, options.audience ?? "public");
+    return forAudience.artifact(artifact, this.audience);
   }
 
   // ─── Cancellation ──────────────────────────────────────────────
@@ -341,17 +345,17 @@ export class ControlPlane {
     }>;
   } {
     return {
-      adapters: [...adapterDefinitions().values()].map((adapter) => ({
-        name: adapter.name,
-        profiles: Object.keys(this.config.profiles?.[adapter.name] ?? adapter.defaultProfiles),
-        ...adapter.capabilities
+      adapters: knownAdapters.map((name) => ({
+        name,
+        profiles: Object.keys(this.config.profiles?.[name] ?? adapterDefaultProfiles(name)),
+        ...adapterCapabilities(name)
       }))
     };
   }
 
   async getEffectiveConfig(): Promise<EffectiveConfig> {
-    const codexHealth = await this.probeCodexHealth();
-    return buildEffectiveConfig(this.config, this.options.paths, codexHealth);
+    const adapterHealth = await this.probeAdapterHealth();
+    return buildEffectiveConfig(this.config, this.options.paths, adapterHealth);
   }
 
   async doctor(): Promise<{
@@ -377,15 +381,16 @@ export class ControlPlane {
       status: storageOk.every(Boolean) ? "pass" : "fail",
       message: "Required storage directories are present"
     });
-    checks.push({ name: "fake_adapter", status: "pass", message: "Fake adapter is built in" });
-    const codexHealth = await this.probeCodexHealth();
-    checks.push({
-      name: "codex_adapter",
-      status: codexHealth.available ? "pass" : "warn",
-      message: codexHealth.available
-        ? `Codex CLI available (${codexHealth.version ?? "unknown version"})`
-        : (codexHealth.reason ?? codexUnavailableMessage)
-    });
+    const adapterHealth = await this.probeAdapterHealth();
+    for (const name of knownAdapters) {
+      const health = adapterHealth[name];
+      const doctorCheck = this.adapters[name].doctorCheck(health);
+      checks.push({
+        name: `${name}_adapter`,
+        status: doctorCheck.status,
+        message: doctorCheck.message
+      });
+    }
 
     return {
       status: checks.some((check) => check.status === "fail") ? "degraded" : "healthy",
@@ -413,12 +418,17 @@ export class ControlPlane {
     return attempt;
   }
 
-  private probeCodexHealth(): Promise<CodexHealth> {
+  private probeAdapterHealth(): Promise<Record<KnownAdapter, AdapterHealthSnapshot>> {
     const now = Date.now();
-    if (!this.codexHealthCache || now - this.codexHealthCache.probedAt > codexHealthTtlMs) {
-      this.codexHealthCache = { probedAt: now, health: checkCodexAdapterHealth({ command: CODEX_COMMAND }) };
+    if (!this.adapterHealthCache || now - this.adapterHealthCache.probedAt > adapterHealthTtlMs) {
+      this.adapterHealthCache = {
+        probedAt: now,
+        health: Promise.all(
+          knownAdapters.map(async (name) => [name, await this.adapters[name].health()] as const)
+        ).then((entries) => Object.fromEntries(entries) as Record<KnownAdapter, AdapterHealthSnapshot>)
+      };
     }
-    return this.codexHealthCache.health;
+    return this.adapterHealthCache.health;
   }
 }
 

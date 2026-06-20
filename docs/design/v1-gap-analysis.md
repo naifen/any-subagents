@@ -33,8 +33,8 @@ Build evidence at close-out: **96 tests pass** (20 files), `tsc --noEmit` clean.
 | 26 | Blocked is terminal | Done | `status.ts` terminal set |
 | 27–29 | Structured results, task+attempt ID required, malformed → failed_contract | Done | `parseResultFile`, `synthesizeResult` |
 | 31 | Artifact previews + resource URIs | Done | `createArtifact` sets preview + `resource_uri` |
-| 32 | Hide raw paths in MCP | Done | `getTaskResult({ audience: "public" })` strips paths; CLI/daemon keep raw |
-| 33 | CLI shows paths | Done | CLI returns full records |
+| 32 | Hide raw paths in MCP | Done | ControlPlane audience is `"public"` at MCP bootstrap; paths stripped on read |
+| 33 | CLI shows paths | Done | ControlPlane audience is `"internal"` at CLI bootstrap; full records returned |
 | 34, 48 | Untrusted evidence, strict harness | Done | Harness writes envelope/brief/instructions/schema/artifacts |
 | 38 | Revision-override recorded as event | Done | `session.revision_override` event |
 | 39, 40 | Idempotent cancel, graceful stop | Done | `cancelTasks`; SIGTERM before settle |
@@ -64,7 +64,7 @@ Build evidence at close-out: **96 tests pass** (20 files), `tsc --noEmit` clean.
 
 - **Story 53 (CLI mirrors MCP)** was marked Passed; it is now **Done**.
 - **Story 16 (per-attempt model/reasoning recording)** is **Done**.
-- **Story 32 path leak** is **Done** via `getTaskResult({ audience: "public" })`.
+- **Story 32 path leak** is **Done** via instance-bound ControlPlane audience (`"public"` for MCP).
 - **Stories 43–45** remain **Partial** for per-attempt changed-file stats only.
 
 ## Remaining partial items (explicitly out of slice scope)

@@ -31,38 +31,73 @@ export const failureStatuses = new Set<TaskRuntimeStatus>([
   "completed_with_failed_verification"
 ]);
 
+export interface TaskStatusCounts {
+  queued: number;
+  running: number;
+  completed: number;
+  blocked: number;
+  cancelled: number;
+  failed: number;
+}
+
+export const countTaskStatuses = (statuses: TaskRuntimeStatus[]): TaskStatusCounts => {
+  const counts: TaskStatusCounts = {
+    queued: 0,
+    running: 0,
+    completed: 0,
+    blocked: 0,
+    cancelled: 0,
+    failed: 0
+  };
+
+  for (const status of statuses) {
+    switch (status) {
+      case "queued":
+        counts.queued++;
+        break;
+      case "running":
+        counts.running++;
+        break;
+      case "completed":
+        counts.completed++;
+        break;
+      case "blocked":
+        counts.blocked++;
+        break;
+      case "cancelled":
+        counts.cancelled++;
+        break;
+      case "failed":
+      case "timed_out":
+      case "interrupted":
+      case "failed_contract":
+      case "completed_with_failed_verification":
+        counts.failed++;
+        break;
+      default: {
+        const unhandled: never = status;
+        throw new Error(`Unhandled task status: ${String(unhandled)}`);
+      }
+    }
+  }
+
+  return counts;
+};
+
 /**
  * Derive a task group's aggregate status from its tasks' statuses.
- *
- * Single-pass count-based approach — no implicit priority ordering.
  */
 export const deriveGroupStatus = (statuses: TaskRuntimeStatus[]): GroupStatus => {
   if (statuses.length === 0) return "queued";
 
-  let running = 0;
-  let queued = 0;
-  let completed = 0;
-  let cancelled = 0;
-  let failed = 0;
+  const counts = countTaskStatuses(statuses);
 
-  for (const status of statuses) {
-    if (status === "running") running++;
-    else if (status === "queued") queued++;
-    else if (status === "completed") completed++;
-    else if (status === "cancelled") cancelled++;
-    else if (failureStatuses.has(status)) failed++;
-  }
+  if (counts.running > 0 || counts.queued > 0) return "running";
+  if (counts.completed === statuses.length) return "completed";
+  if (counts.cancelled === statuses.length) return "cancelled";
+  // Story 26: blocked is terminal; an all-blocked group is a group-level failure.
+  if (counts.blocked === statuses.length) return "failed";
+  if (counts.failed > 0) return "failed";
 
-  // Any task still in progress → group is running
-  if (running > 0 || queued > 0) return "running";
-
-  // All tasks reached the same terminal state
-  if (completed === statuses.length) return "completed";
-  if (cancelled === statuses.length) return "cancelled";
-
-  // Any failures → group failed
-  if (failed > 0) return "failed";
-
-  // Mix of terminal states (e.g. some completed, some cancelled)
   return "mixed";
 };
