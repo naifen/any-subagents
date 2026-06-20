@@ -44,20 +44,10 @@ export const knownAdapters = Object.keys(adapterEntries) as KnownAdapter[];
 export const isKnownAdapter = (adapter: string): adapter is KnownAdapter =>
   (knownAdapters as readonly string[]).includes(adapter);
 
-export interface AdapterDefinition {
-  name: KnownAdapter;
-  capabilities: AdapterCapabilities;
-  defaultProfiles: Record<string, Record<string, never>>;
-}
+export const adapterCapabilities = (name: KnownAdapter): AdapterCapabilities => adapterEntries[name].capabilities;
 
-export const adapterRegistry: AdapterDefinition[] = knownAdapters.map((name) => ({
-  name,
-  capabilities: adapterEntries[name].capabilities,
-  defaultProfiles: adapterEntries[name].defaultProfiles
-}));
-
-export const adapterDefinitions = (): Map<KnownAdapter, AdapterDefinition> =>
-  new Map(adapterRegistry.map((adapter) => [adapter.name, adapter]));
+export const adapterDefaultProfiles = (name: KnownAdapter): Record<string, Record<string, never>> =>
+  adapterEntries[name].defaultProfiles;
 
 /** Returns a new adapter instance. Implementations must be stateless. */
 export const getAdapter = (name: KnownAdapter): Adapter => adapterEntries[name].create();

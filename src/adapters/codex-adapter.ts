@@ -44,6 +44,7 @@ export class CodexAdapter implements Adapter {
     });
     jsonlLines.push(...flushCodexJsonlBuffer(jsonlBuffer));
 
+    // ADR-0007: codex exec does not write result.json; the adapter synthesizes the envelope.
     const result = synthesizeResult({
       taskId: context.task.task_id,
       attemptId: context.attemptId,

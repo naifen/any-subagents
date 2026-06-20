@@ -11,7 +11,7 @@ import {
   type EffectiveConfig,
   type CreateSessionInput
 } from "../schemas/index.js";
-import { adapterDefinitions, getAdapter, knownAdapters } from "../adapters/registry.js";
+import { adapterCapabilities, adapterDefaultProfiles, getAdapter, knownAdapters } from "../adapters/registry.js";
 import { buildEffectiveConfig } from "../config/effective-config.js";
 import { newSessionId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
@@ -30,9 +30,9 @@ import { execFileResult } from "./exec.js";
 import { NotFoundError } from "./errors.js";
 import { Scheduler } from "./scheduler.js";
 import { TaskRunner } from "./task-runner.js";
-import type { AdapterHealthSnapshot } from "../adapters/types.js";
+import type { Adapter, AdapterHealthSnapshot } from "../adapters/types.js";
 import type { KnownAdapter } from "../adapters/registry.js";
-import { terminalStatuses, type TaskRuntimeStatus } from "./status.js";
+import { terminalStatuses, type TaskRuntimeStatus } from "../domain/status.js";
 import { defaultConfig, type AppConfig } from "../config/schema.js";
 import { normalizeConfig } from "../config/normalize.js";
 import { forAudience, type ResultAudience } from "./audience.js";
@@ -80,6 +80,10 @@ export class ControlPlane {
   private readonly scheduler: Scheduler;
   private readonly config: AppConfig;
   private readonly audience: ResultAudience;
+  private readonly adapters = Object.fromEntries(knownAdapters.map((name) => [name, getAdapter(name)])) as Record<
+    KnownAdapter,
+    Adapter
+  >;
   private adapterHealthCache?: { probedAt: number; health: Promise<Record<KnownAdapter, AdapterHealthSnapshot>> };
 
   constructor(private readonly options: ControlPlaneOptions) {
@@ -341,10 +345,10 @@ export class ControlPlane {
     }>;
   } {
     return {
-      adapters: [...adapterDefinitions().values()].map((adapter) => ({
-        name: adapter.name,
-        profiles: Object.keys(this.config.profiles?.[adapter.name] ?? adapter.defaultProfiles),
-        ...adapter.capabilities
+      adapters: knownAdapters.map((name) => ({
+        name,
+        profiles: Object.keys(this.config.profiles?.[name] ?? adapterDefaultProfiles(name)),
+        ...adapterCapabilities(name)
       }))
     };
   }
@@ -380,7 +384,7 @@ export class ControlPlane {
     const adapterHealth = await this.probeAdapterHealth();
     for (const name of knownAdapters) {
       const health = adapterHealth[name];
-      const doctorCheck = getAdapter(name).doctorCheck(health);
+      const doctorCheck = this.adapters[name].doctorCheck(health);
       checks.push({
         name: `${name}_adapter`,
         status: doctorCheck.status,
@@ -420,7 +424,7 @@ export class ControlPlane {
       this.adapterHealthCache = {
         probedAt: now,
         health: Promise.all(
-          knownAdapters.map(async (name) => [name, await getAdapter(name).health()] as const)
+          knownAdapters.map(async (name) => [name, await this.adapters[name].health()] as const)
         ).then((entries) => Object.fromEntries(entries) as Record<KnownAdapter, AdapterHealthSnapshot>)
       };
     }

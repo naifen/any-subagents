@@ -1,5 +1,11 @@
 import { describe, expect, test, vi } from "vitest";
-import { adapterRegistry, getAdapter, isKnownAdapter, knownAdapters } from "../src/adapters/registry.js";
+import {
+  adapterCapabilities,
+  adapterDefaultProfiles,
+  getAdapter,
+  isKnownAdapter,
+  knownAdapters
+} from "../src/adapters/registry.js";
 
 const mockCheckCodexAdapterHealth = vi.fn<
   typeof import("../src/adapters/codex.js").checkCodexAdapterHealth
@@ -16,7 +22,11 @@ vi.mock("../src/adapters/codex.js", async (importOriginal) => {
 
 describe("adapter registry seam", () => {
   test("keeps registry metadata aligned with known adapters", () => {
-    expect(adapterRegistry.map((adapter) => adapter.name).sort()).toEqual([...knownAdapters].sort());
+    for (const name of knownAdapters) {
+      expect(adapterCapabilities(name)).toBeDefined();
+      expect(adapterDefaultProfiles(name)).toBeDefined();
+      expect(getAdapter(name).name).toBe(name);
+    }
     expect(knownAdapters.every((name) => isKnownAdapter(name))).toBe(true);
   });
 

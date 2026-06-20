@@ -6,7 +6,7 @@ import type { Session } from "../schemas/index.js";
 import type { AppConfig } from "../config/schema.js";
 import type { MetricsRecorder } from "./metrics-recorder.js";
 import { ActiveLimitTracker, LimitPolicy } from "./limit-policy.js";
-import { terminalStatuses } from "./status.js";
+import { terminalStatuses } from "../domain/status.js";
 
 export interface QueuedTask {
   taskId: string;
@@ -75,7 +75,7 @@ export class Scheduler {
       running?.attempt_id ??
       (task.status === "running" ? this.options.store.getLatestAttemptForTask(taskId)?.attempt_id : undefined);
     finalizeAttempt(this.options.store, {
-      attemptId,
+      ...(attemptId ? { attemptId } : {}),
       taskId,
       groupId: task.group_id,
       status: "cancelled",
@@ -152,7 +152,7 @@ export class Scheduler {
         const latest = this.options.store.getLatestAttemptForTask(task.task_id);
         const message = error instanceof Error ? error.message : String(error);
         finalizeAttempt(this.options.store, {
-          attemptId: latest?.attempt_id,
+          ...(latest?.attempt_id ? { attemptId: latest.attempt_id } : {}),
           taskId: task.task_id,
           groupId: task.group_id,
           status: "failed",

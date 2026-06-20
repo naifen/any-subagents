@@ -17,7 +17,7 @@ import { execShell } from "./exec.js";
 import { finalizeAttempt } from "./lifecycle.js";
 import { writeHarnessFiles } from "./harness.js";
 import type { SessionBrief } from "../schemas/index.js";
-import { failureStatuses, type TaskRuntimeStatus } from "./status.js";
+import { failureStatuses, type TaskRuntimeStatus } from "../domain/status.js";
 import { getAdapter, isKnownAdapter } from "../adapters/registry.js";
 import type { AttemptSpawner } from "../adapters/types.js";
 import { spawnSupervised, type RunningAttempt } from "./spawn-supervised.js";
@@ -212,11 +212,8 @@ export class TaskRunner {
       status
     });
     finalizeAttempt(this.store, {
-      attemptId,
       taskId: task.task_id,
       groupId: task.group_id,
-      status,
-      ...(error ? { error } : {}),
       attempt: currentAttempt
     });
     return { attemptId, status };

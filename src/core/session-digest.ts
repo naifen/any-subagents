@@ -1,5 +1,5 @@
 import type { Store, StoredGroup } from "../db/store.js";
-import { countTaskStatuses } from "./status.js";
+import { countTaskStatuses } from "../domain/status.js";
 
 export interface SessionDigest {
   session_id: string;

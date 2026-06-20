@@ -2,7 +2,7 @@ import type { RuntimePaths } from "../storage/paths.js";
 import { schemaVersion, type EffectiveConfig } from "../schemas/index.js";
 import type { AppConfig, ProfileConfig } from "./schema.js";
 import { globalConcurrency } from "./normalize.js";
-import { adapterRegistry } from "../adapters/registry.js";
+import { adapterCapabilities, adapterDefaultProfiles, knownAdapters } from "../adapters/registry.js";
 import type { AdapterHealthSnapshot } from "../adapters/types.js";
 import type { KnownAdapter } from "../adapters/registry.js";
 
@@ -12,7 +12,7 @@ export const buildEffectiveConfig = (
   adapterHealth: Record<KnownAdapter, AdapterHealthSnapshot>
 ): EffectiveConfig => {
   const globalLimit = globalConcurrency(config);
-  const defaultProfiles = Object.fromEntries(adapterRegistry.map((adapter) => [adapter.name, adapter.defaultProfiles]));
+  const defaultProfiles = Object.fromEntries(knownAdapters.map((name) => [name, adapterDefaultProfiles(name)]));
   const configuredProfiles = config.profiles ?? {};
   const adapterNames = new Set([...Object.keys(defaultProfiles), ...Object.keys(configuredProfiles)]);
   const profiles = Object.fromEntries(
@@ -39,16 +39,17 @@ export const buildEffectiveConfig = (
   );
 
   const adapters = Object.fromEntries(
-    adapterRegistry.map((adapter) => {
-      const health = adapterHealth[adapter.name];
+    knownAdapters.map((name) => {
+      const health = adapterHealth[name];
+      const capabilities = adapterCapabilities(name);
       return [
-        adapter.name,
+        name,
         {
           available: health.available,
           ...(health.available && health.version ? { version: health.version } : {}),
           ...(!health.available && health.reason ? { reason: health.reason } : {}),
-          supports_native_skills: adapter.capabilities.supports_native_skills,
-          supports_skill_paths: adapter.capabilities.supports_skill_paths
+          supports_native_skills: capabilities.supports_native_skills,
+          supports_skill_paths: capabilities.supports_skill_paths
         }
       ];
     })

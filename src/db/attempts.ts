@@ -1,6 +1,6 @@
 import type Database from "better-sqlite3";
 import type { ResultEnvelope } from "../schemas/index.js";
-import type { TaskRuntimeStatus } from "../core/status.js";
+import type { TaskRuntimeStatus } from "../domain/status.js";
 import type { StoredAttempt } from "./store-types.js";
 
 export interface AttemptRow {
