@@ -522,7 +522,91 @@ describe("task group events and limits", () => {
     store.close();
   });
 
-  test("applies model allowlist fallback to task envelope and attempt fields", async () => {
+  test("rejects disallowed model at submission without allow_fallback", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, {
+      globalConcurrency: 1,
+      config: {
+        schema_version: "1",
+        capacity_preemption_policy: "stop_starting",
+        skill_paths: [],
+        skill_mount: "symlink",
+        skill_path_allowlist: [],
+        redactions: [],
+        path_redaction: false,
+        profiles: {
+          fake: {
+            default: {
+              allowed_models: ["allowed-model"],
+              default_model: "allowed-model"
+            }
+          }
+        }
+      }
+    });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Model rejection." } });
+    await expect(
+      plane.submitTaskGroup({
+        session_id: session.session_id,
+        title: "Rejected",
+        expected_brief_revision: session.brief_revision,
+        tasks: [{
+          mode: "research",
+          goal: "Check model rejection.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          model: "blocked-model"
+        }]
+      })
+    ).rejects.toThrow(/not in profile allowlist/i);
+  });
+
+  test("rejects disallowed reasoning level at submission without allow_fallback", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, {
+      globalConcurrency: 1,
+      config: {
+        schema_version: "1",
+        capacity_preemption_policy: "stop_starting",
+        skill_paths: [],
+        skill_mount: "symlink",
+        skill_path_allowlist: [],
+        redactions: [],
+        path_redaction: false,
+        profiles: {
+          fake: {
+            default: {
+              allowed_reasoning_levels: ["medium"],
+              default_reasoning_level: "medium"
+            }
+          }
+        }
+      }
+    });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Reasoning rejection." } });
+    await expect(
+      plane.submitTaskGroup({
+        session_id: session.session_id,
+        title: "Rejected",
+        expected_brief_revision: session.brief_revision,
+        tasks: [{
+          mode: "research",
+          goal: "Check reasoning rejection.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          reasoning_level: "high"
+        }]
+      })
+    ).rejects.toThrow(/not in profile allowlist/i);
+  });
+
+  test("applies model allowlist fallback when allow_fallback is true", async () => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
     const plane = createTestControlPlane(runtime, {
@@ -557,7 +641,8 @@ describe("task group events and limits", () => {
         adapter: "fake",
         profile: "default",
         success_criteria: ["Done."],
-        model: "blocked-model"
+        model: "blocked-model",
+        allow_fallback: true
       }]
     });
     await plane.waitForTaskGroup(group.group_id, 10_000);

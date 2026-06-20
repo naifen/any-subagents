@@ -2,6 +2,9 @@ import { createHash } from "node:crypto";
 import type { AppConfig, ProfileConfig } from "../config/schema.js";
 import type { TaskEnvelope } from "../schemas/index.js";
 import type { StoredTask } from "../db/store.js";
+import { TaskPolicyError } from "./errors.js";
+
+export { TaskPolicyError };
 
 export interface TaskPolicyEvent {
   type: string;
@@ -13,6 +16,7 @@ export interface TaskPolicyEvent {
 export interface TaskInputFields {
   model?: string;
   reasoning_level?: TaskEnvelope["reasoning_level"];
+  allow_fallback?: boolean;
 }
 
 export interface ResolvedTaskPolicy {
@@ -43,38 +47,60 @@ const asReasoningLevel = (value: string | undefined): TaskEnvelope["reasoning_le
     : undefined;
 };
 
+const getAllowlistViolation = (
+  requested: string | undefined,
+  allowlist: string[] | undefined
+): { requested: string; allowlist: string[] } | undefined => {
+  if (requested && allowlist && allowlist.length > 0 && !allowlist.includes(requested)) {
+    return { requested, allowlist };
+  }
+  return undefined;
+};
+
+const assertAllowlistMatchOrFallback = (
+  field: TaskPolicyError["field"],
+  requested: string,
+  allowlist: string[],
+  allowFallback: boolean | undefined
+): void => {
+  if (allowFallback !== true) {
+    throw new TaskPolicyError(field, requested, allowlist);
+  }
+};
+
 export const resolveTaskFields = (taskInput: TaskInputFields, profile: ProfileConfig): ResolvedTaskFields => {
   const events: TaskPolicyEvent[] = [];
   let effectiveModel = taskInput.model ?? profile.default_model;
   let effectiveReasoning = taskInput.reasoning_level ?? asReasoningLevel(profile.default_reasoning_level);
 
-  if (taskInput.model && profile.allowed_models && profile.allowed_models.length > 0 && !profile.allowed_models.includes(taskInput.model)) {
+  const modelViolation = getAllowlistViolation(taskInput.model, profile.allowed_models);
+  if (modelViolation) {
+    const { requested, allowlist } = modelViolation;
+    assertAllowlistMatchOrFallback("model", requested, allowlist, taskInput.allow_fallback);
     events.push({
       type: "task.model_fallback",
       severity: "warning",
-      message: `Requested model ${taskInput.model} not in allowlist; using profile default`,
+      message: `Requested model ${requested} not in allowlist; using profile default`,
       data: {
-        requested_model: taskInput.model,
-        allowed_models: profile.allowed_models,
+        requested_model: requested,
+        allowed_models: allowlist,
         fallback_model: profile.default_model
       }
     });
     effectiveModel = profile.default_model ?? effectiveModel;
   }
 
-  if (
-    taskInput.reasoning_level &&
-    profile.allowed_reasoning_levels &&
-    profile.allowed_reasoning_levels.length > 0 &&
-    !profile.allowed_reasoning_levels.includes(taskInput.reasoning_level)
-  ) {
+  const reasoningViolation = getAllowlistViolation(taskInput.reasoning_level, profile.allowed_reasoning_levels);
+  if (reasoningViolation) {
+    const { requested, allowlist } = reasoningViolation;
+    assertAllowlistMatchOrFallback("reasoning_level", requested, allowlist, taskInput.allow_fallback);
     events.push({
       type: "task.reasoning_fallback",
       severity: "warning",
-      message: `Requested reasoning level ${taskInput.reasoning_level} not in allowlist`,
+      message: `Requested reasoning level ${requested} not in allowlist`,
       data: {
-        requested_reasoning_level: taskInput.reasoning_level,
-        allowed_reasoning_levels: profile.allowed_reasoning_levels,
+        requested_reasoning_level: requested,
+        allowed_reasoning_levels: allowlist,
         fallback_reasoning_level: profile.default_reasoning_level
       }
     });
@@ -108,6 +134,7 @@ export const resolveTaskProfilePolicy = (
   if (model !== undefined) taskInput.model = model;
   const reasoning = task.envelope.requested_reasoning_level ?? task.envelope.reasoning_level;
   if (reasoning !== undefined) taskInput.reasoning_level = reasoning;
+  if (task.envelope.allow_fallback !== undefined) taskInput.allow_fallback = task.envelope.allow_fallback;
   return resolveProfilePolicy(taskInput, resolveProfile(config, task.adapter, task.profile));
 };
 

@@ -21,6 +21,7 @@ export const submitTaskInputSchema = z
     priority: z.number().int().optional(),
     model: z.string().min(1).optional(),
     reasoning_level: reasoningLevelSchema.optional(),
+    allow_fallback: z.boolean().optional(),
     metadata: z.record(z.string(), z.unknown()).optional()
   })
   .strict();
