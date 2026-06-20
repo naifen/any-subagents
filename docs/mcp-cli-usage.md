@@ -52,6 +52,8 @@ Missing files → defaults apply.
 | `redactions` | string[] | `[]` | Extra regex/string patterns for best-effort secret redaction in harness/logs |
 | `path_redaction` | boolean | `false` | Redact local filesystem paths in log previews and exports |
 
+<!-- Phase 2: `security_preset` lands with security-presets.ts; see Security presets below -->
+
 ---
 
 ## `[concurrency]`
@@ -99,9 +101,9 @@ Nested map: adapter name (`fake`, `codex`, …) → profile name (`default`, …
 |-----|------|---------|---------|
 | `concurrency` | integer | global limit | Max concurrent tasks for this adapter/profile |
 | `timeout_ms` | integer | `30000` in effective-config | Profile timeout (see note below) |
-| `allowed_models` | string[] | — | Allowlist; out-of-list requests fall back with a warning |
+| `allowed_models` | string[] | — | Allowlist; **today** out-of-list requests fall back with a warning event. **Phase 1** will fail submission unless task `allow_fallback: true` (see [gap analysis](design/v1-gap-analysis.md)) |
 | `default_model` | string | — | Default/fallback model |
-| `allowed_reasoning_levels` | string[] | — | Allowlist for reasoning levels |
+| `allowed_reasoning_levels` | string[] | — | Allowlist; **today** out-of-list requests fall back with a warning event. **Phase 1** will fail submission unless task `allow_fallback: true` |
 | `default_reasoning_level` | string | — | Default/fallback reasoning level |
 | `network_policy` | `"allow"` \| `"deny"` \| `"restricted"` | — | Stored on attempt; policy metadata |
 | `package_install_policy` | `"allow"` \| `"deny"` \| `"ask"` | — | Stored on attempt; policy metadata |
@@ -129,6 +131,27 @@ write = true
 ```
 
 Built-in adapters without custom profiles still get a `default` profile from the adapter registry (empty `{}`).
+
+---
+
+## Security presets (Phase 2 — planned)
+
+**Not implemented in v1 close-out Phase 0.** Story 77 ships in Phase 2 via
+`security-presets.ts` and a top-level `security_preset` config key
+(`"strict"` \| `"default"` \| `"permissive"`, default `"default"`).
+
+When implemented, `security_preset` will apply a baseline overlay to every
+profile before explicit profile TOML keys merge (explicit profile fields win).
+
+| Preset | `network_policy` | `package_install_policy` | `permissions` | `sandbox.mode` |
+| --- | --- | --- | --- | --- |
+| `strict` | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* |
+| `default` | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* |
+| `permissive` | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* | *(Phase 2)* |
+
+Inspect resolved values with `get_effective_config` once Phase 2 adds
+`security.preset_expansion` (today only `security.preset` is hard-coded to
+`"default"`).
 
 ---
 

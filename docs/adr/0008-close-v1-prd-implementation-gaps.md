@@ -2,7 +2,9 @@
 
 ## Status
 
-Accepted.
+Accepted. Portions superseded by [ADR-0009](./0009-v1-close-out-adapter-boundary.md)
+(control-plane permission validation scope, security presets implementation timing,
+token/cost budget enforcement, attempt-level infra retry).
 
 ## Context
 

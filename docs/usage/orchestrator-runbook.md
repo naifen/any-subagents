@@ -5,6 +5,11 @@ v1. It uses the project language from `CONTEXT.md`.
 
 ## Principles
 
+> **Boot warning:** Starting the CLI while the MCP server supervises active work
+> can race on shared SQLite — both entry points run restart recovery on boot.
+> Prefer MCP as the long-lived owner during active sessions; use CLI for
+> ephemeral admin/read-only operations. See [ADR-0009](../adr/0009-v1-close-out-adapter-boundary.md).
+
 - The orchestrator decomposes work. The control plane schedules and supervises.
 - Use task groups as semantic phases.
 - Keep tasks independent inside one task group.
