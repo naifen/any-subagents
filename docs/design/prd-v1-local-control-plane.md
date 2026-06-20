@@ -145,7 +145,7 @@ brief, chooses winners, and decides follow-up actions.
 - Use config precedence: built-in defaults, user config, project config, environment operational overrides, then CLI flags/task envelopes.
 - Fail validation on unknown config keys.
 - Reject unknown top-level task/result fields; allow controlled extensions under metadata.
-- Include effective config inspection with resolved storage paths, resolved skill paths, profile defaults, adapter capabilities, and security preset expansion (expansion lands Phase 2 — [gap analysis](v1-gap-analysis.md)).
+- Include effective config inspection with resolved storage paths, resolved skill paths, profile defaults, adapter capabilities, and security preset expansion.
 - Use a strict contract-first subagent harness.
 - Require subagents to write a temporary result file and atomically rename it to the final result file.
 - Require result envelopes to include both task ID and attempt ID.
@@ -157,14 +157,14 @@ brief, chooses winners, and decides follow-up actions.
 - Define neutral reasoning levels: minimal, low, medium, high, xhigh, and max.
 - Allow adapter-specific reasoning options through validated escape hatches.
 - Validate model/reasoning requests against adapter/profile allowlists.
-- Fail unsupported model/reasoning requests by default; allow explicit fallback only when `allow_fallback: true` (reject submission otherwise; emit `task.model_fallback` / `task.reasoning_fallback` events on fallback). **Phase 1** — today the runtime falls back with warning events without checking `allow_fallback` ([gap analysis](v1-gap-analysis.md)).
+- Fail unsupported model/reasoning requests by default; allow explicit fallback only when `allow_fallback: true` (reject submission otherwise; emit `task.model_fallback` / `task.reasoning_fallback` events on fallback).
 - Enforce global, provider, repo, group, and profile **concurrency** limits in v1. Token/cost budget **enforcement** is deferred to post-v1; schema `budgets` fields are retained as metadata until usage aggregation lands ([ADR-0009](../adr/0009-v1-close-out-adapter-boundary.md)).
 - Preserve native global/user-level skill discovery and repo-local skills.
 - Support configured skill paths through read-only symlink/copy mounts, with user allowlisting for external project-config paths.
 - Do not parse, rewrite, summarize, or inject full skill contents by default.
 - Apply best-effort redaction before storing harness files, prompts, briefs, logs, and captured output where practical.
 - Store provider secrets nowhere in v1; rely on existing local agent authentication and explicit env allowlists.
-- Implement strict, default, and permissive security presets as config shortcuts, not a separate policy system (**Phase 2** — Story 77; see [gap analysis](v1-gap-analysis.md)).
+- Implement strict, default, and permissive security presets as config shortcuts, not a separate policy system.
 - Use layered permission enforcement: runtime outer bounds plus subagent-native sandbox behavior. **v1:** control plane records requested/effective policy on attempts; adapter sandbox is the primary enforcement boundary. Control-plane narrow/broaden validation is deferred ([ADR-0009](../adr/0009-v1-close-out-adapter-boundary.md)).
 - Let task-level permissions narrow profile policy freely and broaden only when the profile permits it (enforcement via adapter in v1).
 - Use profile-level command allow/deny lists with task-level narrowing only (enforcement via adapter in v1).

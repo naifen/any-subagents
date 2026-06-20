@@ -5,7 +5,7 @@ This corrects and extends an earlier evaluation report. Decisions for closing
 the gaps are recorded in [ADR-0008](../adr/0008-close-v1-prd-implementation-gaps.md)
 and [ADR-0009](../adr/0009-v1-close-out-adapter-boundary.md).
 
-Build evidence at close-out: run `pnpm test` after Phases 1–3 complete.
+Build evidence at close-out: **142 tests pass** (27 files), `tsc --noEmit` clean, schemas fresh.
 
 ## Status legend
 
@@ -31,7 +31,7 @@ Build evidence at close-out: run `pnpm test` after Phases 1–3 complete.
 | 7 | Global/provider/repo/group limits; token/cost budgets | Partial | Debatable | **Concurrency: Done** (`limit-policy.ts` + config). **Budget enforcement: deferred** — schema fields retained per ADR-0009 |
 | 8 | Priority inheritance | Done | — | Session → group → task in `submitTaskGroup`; session priority persisted |
 | 9 | Deterministic duplicate warnings | Done | — | `task_group.duplicate_warning` event in `submitTaskGroup` |
-| 13–15 | Model/reasoning request, fail-by-default, explicit fallback | Partial | Confirmed | **Done after Phase 1** — `task-policy.ts` + `allow_fallback` on submit |
+| 13–15 | Model/reasoning request, fail-by-default, explicit fallback | Done | — | `task-policy.ts` `TaskPolicyError` + `allow_fallback` on submit; `test/task-policy.test.ts`, `test/control-plane.test.ts` |
 | 16 | Record requested + effective model/reasoning per attempt | Done | — | `task-runner.ts` populates attempt fields |
 | 17–19 | Sandbox/permission/command policy validation | Deferred (adapter-boundary) | Debatable | Control plane records requested/effective policy on attempts; adapter sandbox is enforcement boundary (ADR-0009) |
 | 18 | Network/package-install policy visible per attempt | Done | — | `network_policy` / `package_install_policy` on attempts (recording only; validation deferred with 17–19) |
@@ -66,19 +66,17 @@ Build evidence at close-out: run `pnpm test` after Phases 1–3 complete.
 | 71, 72 | Adapter capability metadata, Codex-first boundary | Done | — | Enriched `listAdapters` |
 | 73 | Cursor MCP setup snippet / installer | Done | — | `docs/cursor-mcp-setup.md` |
 | 74 | No provider secrets stored | Done | — | None stored |
-| 77 | Security presets (`strict` / `default` / `permissive`) | Missing | Confirmed | **Done after Phase 2** — `security-presets.ts` + config key |
+| 77 | Security presets (`strict` / `default` / `permissive`) | Done | — | `security-presets.ts`, `resolve-profile.ts`, `security_preset` config key; `test/security-presets.test.ts` |
 | 79 | Compact digests/previews | Done | — | `buildSessionDigest`, previews |
 | 80 | Stable MCP resource URIs | Partial | Downgrade | Schemas/session/task/artifact resources only; config/docs via `get_effective_config` tool, not MCP resource (ADR-0009) |
 | — | Preflight: refuse dirty source repo | Done | — | `assertCleanRepo` in `createSession` |
 
 ## Corrections to the prior report
 
-- **Stories 13–15** were marked Done; they are **Partial** until Phase 1 ships
-  fail-by-default + explicit `allow_fallback`.
+- **Stories 13–15** are **Done** — fail-by-default + explicit `allow_fallback` shipped in Phase 1.
 - **Stories 17–19** were marked Done; they are **Deferred (adapter-boundary)** —
   metadata recording exists; control-plane validation is deferred.
-- **Story 77** was marked Done; it is **Missing** until Phase 2 ships security
-  presets.
+- **Story 77** is **Done** — security presets shipped in Phase 2.
 - **Story 40** was marked Done; it is **Partial** — SIGTERM only.
 - **Story 80** was marked Done; it is **Partial** — config/docs not MCP resources.
 - **Story 7** concurrency limits are **Done**; token/cost budget enforcement is

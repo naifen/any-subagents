@@ -6,7 +6,7 @@ import {
   applySecurityPresetToProfile,
   expandSecurityPreset
 } from "../src/config/security-presets.js";
-import { resolveProfile } from "../src/core/task-policy.js";
+import { resolveProfile } from "../src/config/resolve-profile.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 
 describe("security presets", () => {

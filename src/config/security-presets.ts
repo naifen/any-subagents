@@ -33,7 +33,7 @@ export const expandSecurityPreset = (preset: SecurityPreset): Partial<ProfileCon
   }
 };
 
-export const mergeProfilePreset = (preset: Partial<ProfileConfig>, explicit: ProfileConfig): ProfileConfig => {
+const mergeProfilePreset = (preset: Partial<ProfileConfig>, explicit: ProfileConfig): ProfileConfig => {
   const { sandbox: explicitSandbox, permissions: explicitPermissions, ...explicitRest } = explicit;
   const { sandbox: presetSandbox, permissions: presetPermissions, ...presetRest } = preset;
   return {

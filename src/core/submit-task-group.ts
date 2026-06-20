@@ -5,7 +5,8 @@ import type { EventInput, StoredGroup, StoredTask } from "../db/store.js";
 import { Store } from "../db/store.js";
 import { newTaskGroupId, newTaskId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
-import { findDuplicateTasks, resolveProfile, resolveProfilePolicy, type TaskInputFields } from "./task-policy.js";
+import { resolveProfile } from "../config/resolve-profile.js";
+import { findDuplicateTasks, resolveProfilePolicy, type TaskInputFields } from "./task-policy.js";
 
 export type { SubmitTaskGroupInput };
 

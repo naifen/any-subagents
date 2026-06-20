@@ -1,11 +1,9 @@
 import { createHash } from "node:crypto";
 import type { AppConfig, ProfileConfig } from "../config/schema.js";
-import { applySecurityPresetToProfile } from "../config/security-presets.js";
+import { resolveProfile } from "../config/resolve-profile.js";
 import type { TaskEnvelope } from "../schemas/index.js";
 import type { StoredTask } from "../db/store.js";
 import { TaskPolicyError } from "./errors.js";
-
-export { TaskPolicyError };
 
 export interface TaskPolicyEvent {
   type: string;
@@ -36,9 +34,6 @@ export interface ResolvedTaskFields {
   events: TaskPolicyEvent[];
 }
 
-export const resolveProfile = (config: AppConfig, adapter: string, profile: string): ProfileConfig =>
-  applySecurityPresetToProfile(config.security_preset ?? "default", config.profiles?.[adapter]?.[profile] ?? {});
-
 const asReasoningLevel = (value: string | undefined): TaskEnvelope["reasoning_level"] | undefined => {
   const levels: TaskEnvelope["reasoning_level"][] = ["minimal", "low", "medium", "high", "xhigh", "max"];
   return value && levels.includes(value as TaskEnvelope["reasoning_level"])
@@ -56,15 +51,17 @@ const getAllowlistViolation = (
   return undefined;
 };
 
-const assertAllowlistMatchOrFallback = (
+const rejectOrRecordFallback = (
   field: TaskPolicyError["field"],
-  requested: string,
-  allowlist: string[],
-  allowFallback: boolean | undefined
+  violation: { requested: string; allowlist: string[] },
+  allowFallback: boolean | undefined,
+  fallbackEvent: TaskPolicyEvent,
+  events: TaskPolicyEvent[]
 ): void => {
   if (allowFallback !== true) {
-    throw new TaskPolicyError(field, requested, allowlist);
+    throw new TaskPolicyError(field, violation.requested, violation.allowlist);
   }
+  events.push(fallbackEvent);
 };
 
 export const resolveTaskFields = (taskInput: TaskInputFields, profile: ProfileConfig): ResolvedTaskFields => {
@@ -75,34 +72,44 @@ export const resolveTaskFields = (taskInput: TaskInputFields, profile: ProfileCo
   const modelViolation = getAllowlistViolation(taskInput.model, profile.allowed_models);
   if (modelViolation) {
     const { requested, allowlist } = modelViolation;
-    assertAllowlistMatchOrFallback("model", requested, allowlist, taskInput.allow_fallback);
-    events.push({
-      type: "task.model_fallback",
-      severity: "warning",
-      message: `Requested model ${requested} not in allowlist; using profile default`,
-      data: {
-        requested_model: requested,
-        allowed_models: allowlist,
-        fallback_model: profile.default_model
-      }
-    });
+    rejectOrRecordFallback(
+      "model",
+      modelViolation,
+      taskInput.allow_fallback,
+      {
+        type: "task.model_fallback",
+        severity: "warning",
+        message: `Requested model ${requested} not in allowlist; using profile default`,
+        data: {
+          requested_model: requested,
+          allowed_models: allowlist,
+          fallback_model: profile.default_model
+        }
+      },
+      events
+    );
     effectiveModel = profile.default_model ?? effectiveModel;
   }
 
   const reasoningViolation = getAllowlistViolation(taskInput.reasoning_level, profile.allowed_reasoning_levels);
   if (reasoningViolation) {
     const { requested, allowlist } = reasoningViolation;
-    assertAllowlistMatchOrFallback("reasoning_level", requested, allowlist, taskInput.allow_fallback);
-    events.push({
-      type: "task.reasoning_fallback",
-      severity: "warning",
-      message: `Requested reasoning level ${requested} not in allowlist`,
-      data: {
-        requested_reasoning_level: requested,
-        allowed_reasoning_levels: allowlist,
-        fallback_reasoning_level: profile.default_reasoning_level
-      }
-    });
+    rejectOrRecordFallback(
+      "reasoning_level",
+      reasoningViolation,
+      taskInput.allow_fallback,
+      {
+        type: "task.reasoning_fallback",
+        severity: "warning",
+        message: `Requested reasoning level ${requested} not in allowlist`,
+        data: {
+          requested_reasoning_level: requested,
+          allowed_reasoning_levels: allowlist,
+          fallback_reasoning_level: profile.default_reasoning_level
+        }
+      },
+      events
+    );
     effectiveReasoning = asReasoningLevel(profile.default_reasoning_level) ?? effectiveReasoning;
   }
 

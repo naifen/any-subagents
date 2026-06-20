@@ -1,5 +1,6 @@
 import { describe, expect, test } from "vitest";
-import { resolveTaskFields, TaskPolicyError } from "../src/core/task-policy.js";
+import { TaskPolicyError } from "../src/core/errors.js";
+import { resolveTaskFields } from "../src/core/task-policy.js";
 
 describe("task policy", () => {
   test("rejects disallowed model when allow_fallback is absent", () => {
