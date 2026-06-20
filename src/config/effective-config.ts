@@ -2,6 +2,7 @@ import type { RuntimePaths } from "../storage/paths.js";
 import { schemaVersion, type EffectiveConfig } from "../schemas/index.js";
 import type { AppConfig, ProfileConfig } from "./schema.js";
 import { globalConcurrency } from "./normalize.js";
+import { expandSecurityPreset } from "./security-presets.js";
 import { adapterCapabilities, adapterDefaultProfiles, knownAdapters } from "../adapters/registry.js";
 import type { AdapterHealthSnapshot } from "../adapters/types.js";
 import type { KnownAdapter } from "../adapters/registry.js";
@@ -68,7 +69,8 @@ export const buildEffectiveConfig = (
     profiles,
     adapters,
     security: {
-      preset: "default",
+      preset: config.security_preset ?? "default",
+      preset_expansion: expandSecurityPreset(config.security_preset ?? "default"),
       stores_provider_secrets: false,
       path_redaction: config.path_redaction
     },

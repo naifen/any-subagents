@@ -1,5 +1,7 @@
 import * as z from "zod";
 
+import { securityPresetSchema } from "./security-presets.js";
+
 const limitSchema = z
   .object({
     global: z.number().int().positive().optional(),
@@ -37,6 +39,7 @@ export const configSchema = z
     skill_path_allowlist: z.array(z.string()).default([]),
     redactions: z.array(z.string()).default([]),
     path_redaction: z.boolean().default(false),
+    security_preset: z.enum(securityPresetSchema).default("default"),
     profiles: z.record(z.string(), z.record(z.string(), profileSchema)).optional(),
     export: z
       .object({

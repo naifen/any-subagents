@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import type { AppConfig, ProfileConfig } from "../config/schema.js";
+import { applySecurityPresetToProfile } from "../config/security-presets.js";
 import type { TaskEnvelope } from "../schemas/index.js";
 import type { StoredTask } from "../db/store.js";
 import { TaskPolicyError } from "./errors.js";
@@ -35,10 +36,8 @@ export interface ResolvedTaskFields {
   events: TaskPolicyEvent[];
 }
 
-export const resolveProfile = (config: AppConfig, adapter: string, profile: string): ProfileConfig => {
-  const adapterProfiles = config.profiles?.[adapter];
-  return adapterProfiles?.[profile] ?? {};
-};
+export const resolveProfile = (config: AppConfig, adapter: string, profile: string): ProfileConfig =>
+  applySecurityPresetToProfile(config.security_preset ?? "default", config.profiles?.[adapter]?.[profile] ?? {});
 
 const asReasoningLevel = (value: string | undefined): TaskEnvelope["reasoning_level"] | undefined => {
   const levels: TaskEnvelope["reasoning_level"][] = ["minimal", "low", "medium", "high", "xhigh", "max"];
