@@ -6,7 +6,7 @@ import {
   applySecurityPresetToProfile,
   expandSecurityPreset
 } from "../src/config/security-presets.js";
-import { resolveProfile } from "../src/config/resolve-profile.js";
+import { resolveProfile } from "../src/config/profile-resolution.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 
 describe("security presets", () => {
@@ -83,8 +83,32 @@ describe("security presets", () => {
     });
   });
 
+  test("buildEffectiveConfig applies preset overlay to displayed profiles", async () => {
+    const paths = await createTestRuntimePaths();
+    const config = normalizeConfig(configSchema.parse({ security_preset: "strict" }));
+    const effective = buildEffectiveConfig(config, paths, {
+      fake: { available: true },
+      codex: { available: false, reason: "test" }
+    });
+    const fakeDefault = (effective.profiles["fake"] as { default?: unknown } | undefined)?.default;
+    expect(fakeDefault).toMatchObject({
+      network_policy: "deny",
+      package_install_policy: "deny",
+      sandbox: { mode: "strict" }
+    });
+  });
+
   test("resolveProfile applies preset when profile is not configured", () => {
     const config = normalizeConfig(defaultConfig());
     expect(resolveProfile(config, "fake", "default").network_policy).toBe("restricted");
+  });
+
+  test("explicit profile sandbox/permissions overrides preset partially", () => {
+    const merged = applySecurityPresetToProfile("strict", {
+      sandbox: { mode: "workspace-write" },
+      permissions: { write: true }
+    });
+    expect(merged.sandbox).toEqual({ mode: "workspace-write" });
+    expect(merged.permissions).toEqual({ write: true, network: false });
   });
 });

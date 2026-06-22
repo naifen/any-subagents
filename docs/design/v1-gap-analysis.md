@@ -5,7 +5,7 @@ This corrects and extends an earlier evaluation report. Decisions for closing
 the gaps are recorded in [ADR-0008](../adr/0008-close-v1-prd-implementation-gaps.md)
 and [ADR-0009](../adr/0009-v1-close-out-adapter-boundary.md).
 
-Build evidence at close-out: **142 tests pass** (27 files), `tsc --noEmit` clean, schemas fresh.
+Build evidence at close-out: **148 tests pass** (27 files), `tsc --noEmit` clean, schemas fresh.
 
 ## Status legend
 

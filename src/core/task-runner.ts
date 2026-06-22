@@ -58,6 +58,7 @@ export class TaskRunner {
     const attemptId = newAttemptId();
     const attemptNumber = task.attempt_count + 1;
     const timestamp = nowIso();
+    // Re-resolve policy at attempt start so stale queued tasks fail if config tightened after submission.
     const policy = resolveTaskProfilePolicy(this.config, task);
     const requestedModel = task.envelope.requested_model ?? task.envelope.model;
     const requestedReasoning = task.envelope.requested_reasoning_level ?? task.envelope.reasoning_level;

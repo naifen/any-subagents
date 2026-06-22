@@ -18,9 +18,10 @@ export class TaskPolicyError extends Error {
   readonly requested: string;
   readonly allowlist: string[];
 
-  constructor(field: "model" | "reasoning_level", requested: string, allowlist: string[]) {
+  constructor(field: "model" | "reasoning_level", requested: string, allowlist: string[], message?: string) {
     super(
-      `Requested ${field} "${requested}" is not in profile allowlist [${allowlist.join(", ")}]; set allow_fallback: true to use profile default`
+      message ??
+        `Requested ${field} "${requested}" is not in profile allowlist [${allowlist.join(", ")}]; set allow_fallback: true to use profile default`
     );
     this.name = "TaskPolicyError";
     this.field = field;

@@ -74,4 +74,46 @@ describe("task policy", () => {
       expect(policyError.allowlist).toEqual(["gpt-4"]);
     }
   });
+
+  test("throws when allow_fallback is true but profile has no default_model", () => {
+    expect(() =>
+      resolveTaskFields(
+        { model: "gpt-5", allow_fallback: true },
+        { allowed_models: ["gpt-4"] }
+      )
+    ).toThrow(/allow_fallback is true but profile has no default_model/i);
+  });
+
+  test("throws when allow_fallback is true but profile has no valid default_reasoning_level", () => {
+    expect(() =>
+      resolveTaskFields(
+        { reasoning_level: "high", allow_fallback: true },
+        { allowed_reasoning_levels: ["medium"] }
+      )
+    ).toThrow(/allow_fallback is true but profile has no default_reasoning_level/i);
+
+    expect(() =>
+      resolveTaskFields(
+        { reasoning_level: "high", allow_fallback: true },
+        { allowed_reasoning_levels: ["medium"], default_reasoning_level: "not-a-level" }
+      )
+    ).toThrow(/allow_fallback is true but profile has no default_reasoning_level/i);
+  });
+
+  test("applies both model and reasoning fallback when both are disallowed and allow_fallback is true", () => {
+    const resolved = resolveTaskFields(
+      { model: "gpt-5", reasoning_level: "high", allow_fallback: true },
+      {
+        allowed_models: ["gpt-4"],
+        default_model: "gpt-4",
+        allowed_reasoning_levels: ["medium"],
+        default_reasoning_level: "medium"
+      }
+    );
+    expect(resolved.effectiveModel).toBe("gpt-4");
+    expect(resolved.effectiveReasoning).toBe("medium");
+    expect(resolved.events).toHaveLength(2);
+    expect(resolved.events[0]?.type).toBe("task.model_fallback");
+    expect(resolved.events[1]?.type).toBe("task.reasoning_fallback");
+  });
 });

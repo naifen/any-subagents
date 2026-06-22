@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, test } from "vitest";
 import { LimitPolicy } from "../src/core/limit-policy.js";
-import type { AppConfig } from "../src/config/schema.js";
+import { minimalTestConfig } from "../src/test-support/config-fixtures.js";
 import type { Session } from "../src/schemas/index.js";
 
 class FakeCounts {
@@ -69,18 +69,10 @@ describe("LimitPolicy", () => {
   test("blocks start when profile concurrency is saturated", () => {
     const counts = new FakeCounts();
     counts.setCounts({ profile: { "fake/default": 1 } });
-    const config: AppConfig = {
-      schema_version: "1",
-      skill_paths: [],
-      skill_path_allowlist: [],
-      redactions: [],
-      path_redaction: false,
-      security_preset: "default",
-      skill_mount: "symlink",
-      capacity_preemption_policy: "stop_starting",
+    const config = minimalTestConfig({
       concurrency: { global: 4 },
       profiles: { fake: { default: { concurrency: 1 } } }
-    };
+    });
     const policy = new LimitPolicy(config, counts, () => session);
     expect(policy.canStart(task)).toBe(false);
   });
@@ -88,18 +80,10 @@ describe("LimitPolicy", () => {
   test("treats profile saturation as an eviction target for cancel_running", () => {
     const counts = new FakeCounts();
     counts.setCounts({ profile: { "fake/default": 1 }, global: 1 });
-    const config: AppConfig = {
-      schema_version: "1",
-      skill_paths: [],
-      skill_path_allowlist: [],
-      redactions: [],
-      path_redaction: false,
-      security_preset: "default",
-      skill_mount: "symlink",
-      capacity_preemption_policy: "stop_starting",
+    const config = minimalTestConfig({
       concurrency: { global: 4 },
       profiles: { fake: { default: { concurrency: 1 } } }
-    };
+    });
     const policy = new LimitPolicy(config, counts, () => session);
     const snapshot = {
       taskId: "task_running",
@@ -115,18 +99,10 @@ describe("LimitPolicy", () => {
   test("does not evict unrelated profile when a different profile is saturated", () => {
     const counts = new FakeCounts();
     counts.setCounts({ profile: { "fake/heavy": 1 } });
-    const config: AppConfig = {
-      schema_version: "1",
-      skill_paths: [],
-      skill_path_allowlist: [],
-      redactions: [],
-      path_redaction: false,
-      security_preset: "default",
-      skill_mount: "symlink",
-      capacity_preemption_policy: "stop_starting",
+    const config = minimalTestConfig({
       concurrency: { global: 4 },
       profiles: { fake: { heavy: { concurrency: 1 }, default: { concurrency: 1 } } }
-    };
+    });
     const policy = new LimitPolicy(config, counts, () => session);
     const snapshot = {
       taskId: "task_running",

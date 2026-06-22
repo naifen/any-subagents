@@ -21,10 +21,8 @@ export const normalizeConfig = (config: AppConfig): AppConfig => {
   const { max_concurrency: _legacy, budget_exhaustion_policy, ...rest } = config;
   const capacityPreemptionPolicy =
     rest.capacity_preemption_policy ?? budget_exhaustion_policy ?? defaultCapacityPreemptionPolicy;
-  const securityPreset = rest.security_preset ?? "default";
   return configSchema.parse({
     ...rest,
-    security_preset: securityPreset,
     capacity_preemption_policy: capacityPreemptionPolicy,
     concurrency: { ...config.concurrency, global }
   });

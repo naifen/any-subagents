@@ -1,8 +1,7 @@
-import type { ProfileConfig } from "./schema.js";
+import type { ProfileConfig } from "./profile-schema.js";
+import { type SecurityPreset } from "./security-preset-constants.js";
 
-export type SecurityPreset = "strict" | "default" | "permissive";
-
-export const securityPresetSchema = ["strict", "default", "permissive"] as const;
+export type { SecurityPreset } from "./security-preset-constants.js";
 
 export const expandSecurityPreset = (preset: SecurityPreset): Partial<ProfileConfig> => {
   switch (preset) {
@@ -36,11 +35,14 @@ export const expandSecurityPreset = (preset: SecurityPreset): Partial<ProfileCon
 const mergeProfilePreset = (preset: Partial<ProfileConfig>, explicit: ProfileConfig): ProfileConfig => {
   const { sandbox: explicitSandbox, permissions: explicitPermissions, ...explicitRest } = explicit;
   const { sandbox: presetSandbox, permissions: presetPermissions, ...presetRest } = preset;
+  // ponytail: use strict undefined checks rather than truthy checks to handle empty objects safely
   return {
     ...presetRest,
     ...explicitRest,
-    ...(presetSandbox || explicitSandbox ? { sandbox: { ...presetSandbox, ...explicitSandbox } } : {}),
-    ...(presetPermissions || explicitPermissions
+    ...(presetSandbox !== undefined || explicitSandbox !== undefined
+      ? { sandbox: { ...presetSandbox, ...explicitSandbox } }
+      : {}),
+    ...(presetPermissions !== undefined || explicitPermissions !== undefined
       ? { permissions: { ...presetPermissions, ...explicitPermissions } }
       : {})
   };

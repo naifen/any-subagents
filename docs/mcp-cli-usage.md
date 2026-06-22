@@ -136,7 +136,7 @@ Built-in adapters without custom profiles still get a `default` profile from the
 ## Security presets
 
 Top-level `security_preset` applies a baseline overlay to every profile before
-explicit profile TOML keys merge (explicit profile fields win).
+explicit profile keys merge (explicit profile fields win).
 
 | Preset | `network_policy` | `package_install_policy` | `permissions` | `sandbox.mode` |
 | --- | --- | --- | --- | --- |
