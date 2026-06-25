@@ -1,4 +1,5 @@
 import { finalizeAttempt } from "./lifecycle.js";
+import { TaskPolicyError } from "./errors.js";
 import { Store, type StoredTask } from "../db/store.js";
 import { TaskRunner, type RunningAttempt } from "./task-runner.js";
 import { killRunningAttempt } from "./spawn-supervised.js";
@@ -149,6 +150,17 @@ export class Scheduler {
     this.activeCounts.add(task, session);
     const run = this.runTask(task, queuedAt)
       .catch((error: unknown) => {
+        if (error instanceof TaskPolicyError) {
+          this.options.store.appendEvent({
+            type: "task.policy_violation",
+            task_id: task.task_id,
+            group_id: task.group_id,
+            session_id: task.session_id,
+            severity: "error",
+            message: error.message,
+            data: { field: error.field, requested: error.requested, allowlist: error.allowlist }
+          });
+        }
         const latest = this.options.store.getLatestAttemptForTask(task.task_id);
         const message = error instanceof Error ? error.message : String(error);
         finalizeAttempt(this.options.store, {

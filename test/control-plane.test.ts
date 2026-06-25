@@ -2,9 +2,15 @@ import { readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { afterEach, describe, expect, test } from "vitest";
 import { createTestControlPlane } from "../src/test-support/control-plane.js";
+import { minimalTestConfig } from "../src/test-support/config-fixtures.js";
 import { Store } from "../src/db/store.js";
 import { createTestRuntimePaths } from "../src/test-support/runtime.js";
 import { createTempGitRepo } from "../src/test-support/git.js";
+import { TaskPolicyError } from "../src/core/errors.js";
+import {
+  buildTaskGroupSubmission,
+  persistTaskGroupSubmission
+} from "../src/core/submit-task-group.js";
 
 
 const planes: Array<{ close: () => Promise<void> }> = [];
@@ -522,19 +528,74 @@ describe("task group events and limits", () => {
     store.close();
   });
 
-  test("applies model allowlist fallback to task envelope and attempt fields", async () => {
+  const setupRejectionTestPlane = async (profileConfig: Record<string, unknown>) => {
     const repo = await createTempGitRepo();
     const runtime = await createTestRuntimePaths();
     const plane = createTestControlPlane(runtime, {
       globalConcurrency: 1,
-      config: {
-        schema_version: "1",
-        capacity_preemption_policy: "stop_starting",
-        skill_paths: [],
-        skill_mount: "symlink",
-        skill_path_allowlist: [],
-        redactions: [],
-        path_redaction: false,
+      config: minimalTestConfig({
+        profiles: {
+          fake: {
+            default: profileConfig
+          }
+        }
+      })
+    });
+    planes.push(plane);
+    const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Rejection test." } });
+    return { plane, session };
+  };
+
+  test("rejects disallowed model at submission without allow_fallback", async () => {
+    const { plane, session } = await setupRejectionTestPlane({
+      allowed_models: ["allowed-model"],
+      default_model: "allowed-model"
+    });
+    await expect(
+      plane.submitTaskGroup({
+        session_id: session.session_id,
+        title: "Rejected",
+        expected_brief_revision: session.brief_revision,
+        tasks: [{
+          mode: "research",
+          goal: "Check model rejection.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          model: "blocked-model"
+        }]
+      })
+    ).rejects.toThrow(TaskPolicyError);
+  });
+
+  test("rejects disallowed reasoning level at submission without allow_fallback", async () => {
+    const { plane, session } = await setupRejectionTestPlane({
+      allowed_reasoning_levels: ["medium"],
+      default_reasoning_level: "medium"
+    });
+    await expect(
+      plane.submitTaskGroup({
+        session_id: session.session_id,
+        title: "Rejected",
+        expected_brief_revision: session.brief_revision,
+        tasks: [{
+          mode: "research",
+          goal: "Check reasoning rejection.",
+          adapter: "fake",
+          profile: "default",
+          success_criteria: ["Done."],
+          reasoning_level: "high"
+        }]
+      })
+    ).rejects.toThrow(TaskPolicyError);
+  });
+
+  test("applies model allowlist fallback when allow_fallback is true", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const plane = createTestControlPlane(runtime, {
+      globalConcurrency: 1,
+      config: minimalTestConfig({
         profiles: {
           fake: {
             default: {
@@ -543,7 +604,7 @@ describe("task group events and limits", () => {
             }
           }
         }
-      }
+      })
     });
     planes.push(plane);
     const session = await plane.createSession({ repo, base_ref: "HEAD", brief: { goal: "Model fallback." } });
@@ -557,7 +618,8 @@ describe("task group events and limits", () => {
         adapter: "fake",
         profile: "default",
         success_criteria: ["Done."],
-        model: "blocked-model"
+        model: "blocked-model",
+        allow_fallback: true
       }]
     });
     await plane.waitForTaskGroup(group.group_id, 10_000);
@@ -566,6 +628,75 @@ describe("task group events and limits", () => {
     expect(result.attempt.effective_model).toBe("allowed-model");
     const events = plane.listEvents({ session_id: session.session_id, type: "task.model_fallback" });
     expect(events.events).toHaveLength(1);
+  });
+
+  test("fails queued task at runtime when profile allowlist no longer includes requested model", async () => {
+    const repo = await createTempGitRepo();
+    const runtime = await createTestRuntimePaths();
+    const submitConfig = minimalTestConfig({
+      profiles: {
+        fake: {
+          default: {
+            allowed_models: ["allowed-model"],
+            default_model: "allowed-model"
+          }
+        }
+      }
+    });
+    const runtimeConfig = minimalTestConfig({
+      profiles: {
+        fake: {
+          default: {
+            allowed_models: ["other-model"],
+            default_model: "other-model"
+          }
+        }
+      }
+    });
+
+    const setupPlane = createTestControlPlane(runtime, { globalConcurrency: 1, config: submitConfig });
+    const session = await setupPlane.createSession({
+      repo,
+      base_ref: "HEAD",
+      brief: { goal: "Runtime policy rejection." }
+    });
+    await setupPlane.close();
+
+    const submission = buildTaskGroupSubmission(submitConfig, session, {
+      session_id: session.session_id,
+      title: "Stale allowlist",
+      expected_brief_revision: session.brief_revision,
+      tasks: [{
+        mode: "research",
+        goal: "Check runtime policy rejection.",
+        adapter: "fake",
+        profile: "default",
+        success_criteria: ["Done."],
+        model: "allowed-model"
+      }]
+    });
+    const store = new Store(runtime.dbPath);
+    persistTaskGroupSubmission(store, submission);
+    store.close();
+
+    const plane = createTestControlPlane(runtime, { globalConcurrency: 1, config: runtimeConfig });
+    planes.push(plane);
+    const terminal = await plane.waitForTaskGroup(submission.group.group_id, 10_000);
+    expect(terminal.status).toBe("failed");
+
+    const taskId = submission.taskInputs[0]!.task_id;
+    const policyEvents = plane.listEvents({ session_id: session.session_id, type: "task.policy_violation" });
+    expect(policyEvents.events).toHaveLength(1);
+    expect(policyEvents.events[0]?.data).toMatchObject({
+      field: "model",
+      requested: "allowed-model",
+      allowlist: ["other-model"]
+    });
+
+    const verifyStore = new Store(runtime.dbPath);
+    expect(verifyStore.getLatestAttemptForTask(taskId)).toBeUndefined();
+    expect(verifyStore.getTask(taskId)?.status).toBe("failed");
+    verifyStore.close();
   });
 
   test("rejects dirty repo when submitting a task group", async () => {

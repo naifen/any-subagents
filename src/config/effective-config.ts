@@ -1,7 +1,10 @@
 import type { RuntimePaths } from "../storage/paths.js";
 import { schemaVersion, type EffectiveConfig } from "../schemas/index.js";
-import type { AppConfig, ProfileConfig } from "./schema.js";
+import type { AppConfig } from "./schema.js";
+import type { ProfileConfig } from "./profile-schema.js";
 import { globalConcurrency } from "./normalize.js";
+import { expandSecurityPreset } from "./security-presets.js";
+import { projectEffectiveProfile, resolveProfile } from "./profile-resolution.js";
 import { adapterCapabilities, adapterDefaultProfiles, knownAdapters } from "../adapters/registry.js";
 import type { AdapterHealthSnapshot } from "../adapters/types.js";
 import type { KnownAdapter } from "../adapters/registry.js";
@@ -26,12 +29,7 @@ export const buildEffectiveConfig = (
         Object.fromEntries(
           Object.entries(adapterProfiles).map(([profileName, profileConfig]) => [
             profileName,
-            {
-              concurrency: profileConfig.concurrency ?? globalLimit,
-              timeout_ms: profileConfig.timeout_ms ?? 30_000,
-              ...(profileConfig.allowed_models ? { allowed_models: profileConfig.allowed_models } : {}),
-              ...(profileConfig.default_model ? { default_model: profileConfig.default_model } : {})
-            }
+            projectEffectiveProfile(resolveProfile(config, adapter, profileName, profileConfig), globalLimit)
           ])
         )
       ];
@@ -68,7 +66,8 @@ export const buildEffectiveConfig = (
     profiles,
     adapters,
     security: {
-      preset: "default",
+      preset: config.security_preset ?? "default",
+      preset_expansion: expandSecurityPreset(config.security_preset ?? "default"),
       stores_provider_secrets: false,
       path_redaction: config.path_redaction
     },

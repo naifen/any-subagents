@@ -51,6 +51,7 @@ Missing files → defaults apply.
 | `skill_path_allowlist` | string[] | `[]` | If non-empty, only skill paths under these prefixes are mounted |
 | `redactions` | string[] | `[]` | Extra regex/string patterns for best-effort secret redaction in harness/logs |
 | `path_redaction` | boolean | `false` | Redact local filesystem paths in log previews and exports |
+| `security_preset` | `"strict"` \| `"default"` \| `"permissive"` | `"default"` | Baseline security overlay applied to all profiles before explicit profile keys (see [Security presets](#security-presets)) |
 
 ---
 
@@ -99,9 +100,9 @@ Nested map: adapter name (`fake`, `codex`, …) → profile name (`default`, …
 |-----|------|---------|---------|
 | `concurrency` | integer | global limit | Max concurrent tasks for this adapter/profile |
 | `timeout_ms` | integer | `30000` in effective-config | Profile timeout (see note below) |
-| `allowed_models` | string[] | — | Allowlist; out-of-list requests fall back with a warning |
+| `allowed_models` | string[] | — | Allowlist; out-of-list requests fail submission unless task `allow_fallback: true` |
 | `default_model` | string | — | Default/fallback model |
-| `allowed_reasoning_levels` | string[] | — | Allowlist for reasoning levels |
+| `allowed_reasoning_levels` | string[] | — | Allowlist; out-of-list requests fail submission unless task `allow_fallback: true` |
 | `default_reasoning_level` | string | — | Default/fallback reasoning level |
 | `network_policy` | `"allow"` \| `"deny"` \| `"restricted"` | — | Stored on attempt; policy metadata |
 | `package_install_policy` | `"allow"` \| `"deny"` \| `"ask"` | — | Stored on attempt; policy metadata |
@@ -129,6 +130,31 @@ write = true
 ```
 
 Built-in adapters without custom profiles still get a `default` profile from the adapter registry (empty `{}`).
+
+---
+
+## Security presets
+
+Top-level `security_preset` applies a baseline overlay to every profile before
+explicit profile keys merge (explicit profile fields win).
+
+| Preset | `network_policy` | `package_install_policy` | `permissions` | `sandbox.mode` |
+| --- | --- | --- | --- | --- |
+| `strict` | `deny` | `deny` | `{ write: false, network: false }` | `strict` |
+| `default` | `restricted` | `ask` | *(no overlay)* | `restricted` |
+| `permissive` | `allow` | `allow` | `{ write: true, network: true }` | `workspace-write` |
+
+Example:
+
+```toml
+security_preset = "strict"
+
+[profiles.codex.default]
+network_policy = "allow"  # overrides strict preset for this profile
+```
+
+Inspect resolved values with `get_effective_config` (`security.preset` and
+`security.preset_expansion`).
 
 ---
 

@@ -18,7 +18,76 @@
       "propertyNames": {
         "type": "string"
       },
-      "additionalProperties": {}
+      "additionalProperties": {
+        "type": "object",
+        "propertyNames": {
+          "type": "string"
+        },
+        "additionalProperties": {
+          "type": "object",
+          "properties": {
+            "concurrency": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowed_models": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "allowed_reasoning_levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "default_model": {
+              "type": "string"
+            },
+            "default_reasoning_level": {
+              "type": "string"
+            },
+            "network_policy": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny",
+                "restricted"
+              ]
+            },
+            "package_install_policy": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny",
+                "ask"
+              ]
+            },
+            "sandbox": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "permissions": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "additionalProperties": false
+        }
+      }
     },
     "adapters": {
       "type": "object",
@@ -29,10 +98,93 @@
     },
     "security": {
       "type": "object",
-      "propertyNames": {
-        "type": "string"
+      "properties": {
+        "preset": {
+          "type": "string",
+          "enum": [
+            "strict",
+            "default",
+            "permissive"
+          ]
+        },
+        "preset_expansion": {
+          "type": "object",
+          "properties": {
+            "concurrency": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "timeout_ms": {
+              "type": "integer",
+              "exclusiveMinimum": 0,
+              "maximum": 9007199254740991
+            },
+            "allowed_models": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "allowed_reasoning_levels": {
+              "type": "array",
+              "items": {
+                "type": "string"
+              }
+            },
+            "default_model": {
+              "type": "string"
+            },
+            "default_reasoning_level": {
+              "type": "string"
+            },
+            "network_policy": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny",
+                "restricted"
+              ]
+            },
+            "package_install_policy": {
+              "type": "string",
+              "enum": [
+                "allow",
+                "deny",
+                "ask"
+              ]
+            },
+            "sandbox": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            },
+            "permissions": {
+              "type": "object",
+              "propertyNames": {
+                "type": "string"
+              },
+              "additionalProperties": {}
+            }
+          },
+          "additionalProperties": false
+        },
+        "stores_provider_secrets": {
+          "type": "boolean"
+        },
+        "path_redaction": {
+          "type": "boolean"
+        }
       },
-      "additionalProperties": {}
+      "required": [
+        "preset",
+        "preset_expansion",
+        "stores_provider_secrets",
+        "path_redaction"
+      ],
+      "additionalProperties": false
     },
     "skill_paths": {
       "type": "array",

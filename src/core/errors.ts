@@ -10,3 +10,22 @@ export class NotFoundError extends Error {
     this.name = "NotFoundError";
   }
 }
+
+/** Typed error for task model/reasoning allowlist violations at submission or runtime. */
+export class TaskPolicyError extends Error {
+  readonly code = "TASK_POLICY" as const;
+  readonly field: "model" | "reasoning_level";
+  readonly requested: string;
+  readonly allowlist: string[];
+
+  constructor(field: "model" | "reasoning_level", requested: string, allowlist: string[], message?: string) {
+    super(
+      message ??
+        `Requested ${field} "${requested}" is not in profile allowlist [${allowlist.join(", ")}]; set allow_fallback: true to use profile default`
+    );
+    this.name = "TaskPolicyError";
+    this.field = field;
+    this.requested = requested;
+    this.allowlist = allowlist;
+  }
+}

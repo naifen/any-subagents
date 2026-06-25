@@ -1,4 +1,6 @@
 import * as z from "zod";
+import { profileSchema } from "../config/profile-schema.js";
+import { securityPresets } from "../config/security-preset-constants.js";
 import {
   reasoningLevelSchema,
   sessionBriefSchema,
@@ -244,9 +246,16 @@ export const effectiveConfigSchema = z
   .object({
     schema_version: z.literal(schemaVersion),
     storage: metadataSchema,
-    profiles: metadataSchema,
+    profiles: z.record(z.string(), z.record(z.string(), profileSchema.partial())),
     adapters: metadataSchema,
-    security: metadataSchema,
+    security: z
+      .object({
+        preset: z.enum(securityPresets),
+        preset_expansion: profileSchema.partial(),
+        stores_provider_secrets: z.boolean(),
+        path_redaction: z.boolean()
+      })
+      .strict(),
     skill_paths: z.array(z.string()),
     redactions: z.array(z.string()).default([])
   })

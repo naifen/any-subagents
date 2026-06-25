@@ -59,6 +59,14 @@ describe("doctor and effective config", () => {
         fake: { available: true },
         codex: { available: true, version: "codex-cli 1.0.0" }
       });
+      expect(config.security).toMatchObject({
+        preset: "default",
+        preset_expansion: {
+          network_policy: "restricted",
+          package_install_policy: "ask",
+          sandbox: { mode: "restricted" }
+        }
+      });
       expect(JSON.stringify(config)).not.toContain("API_KEY");
 
       const doctor = await plane.doctor();

@@ -5,7 +5,8 @@ import type { EventInput, StoredGroup, StoredTask } from "../db/store.js";
 import { Store } from "../db/store.js";
 import { newTaskGroupId, newTaskId } from "../util/id.js";
 import { nowIso } from "../util/time.js";
-import { findDuplicateTasks, resolveProfile, resolveProfilePolicy } from "./task-policy.js";
+import { resolveProfile } from "../config/profile-resolution.js";
+import { findDuplicateTasks, resolveProfilePolicy, type TaskInputFields } from "./task-policy.js";
 
 export type { SubmitTaskGroupInput };
 
@@ -47,13 +48,12 @@ export const buildTaskGroupSubmission = (
   const taskInputs = input.tasks.map((taskInput) => {
     const task_id = newTaskId();
     const profile = resolveProfile(config, taskInput.adapter, taskInput.profile);
-    const resolved = resolveProfilePolicy(
-      {
-        ...(taskInput.model !== undefined ? { model: taskInput.model } : {}),
-        ...(taskInput.reasoning_level !== undefined ? { reasoning_level: taskInput.reasoning_level } : {})
-      },
-      profile
-    );
+    const policyInput: TaskInputFields = {
+      ...(taskInput.model !== undefined ? { model: taskInput.model } : {}),
+      ...(taskInput.reasoning_level !== undefined ? { reasoning_level: taskInput.reasoning_level } : {}),
+      ...(taskInput.allow_fallback !== undefined ? { allow_fallback: taskInput.allow_fallback } : {})
+    };
+    const resolved = resolveProfilePolicy(policyInput, profile);
     for (const event of resolved.events) {
       pendingEvents.push({ ...event, session_id: session.session_id });
     }
@@ -74,6 +74,7 @@ export const buildTaskGroupSubmission = (
       timeout_ms: taskInput.timeout_ms,
       ...(taskInput.model ? { requested_model: taskInput.model } : {}),
       ...(taskInput.reasoning_level ? { requested_reasoning_level: taskInput.reasoning_level } : {}),
+      ...(taskInput.allow_fallback !== undefined ? { allow_fallback: taskInput.allow_fallback } : {}),
       ...(resolved.effectiveModel ? { model: resolved.effectiveModel } : {}),
       ...(resolved.effectiveReasoning ? { reasoning_level: resolved.effectiveReasoning } : {}),
       priority: taskInput.priority ?? inheritedPriority,
